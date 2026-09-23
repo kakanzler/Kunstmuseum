@@ -40,8 +40,8 @@ git commit -m "<何をなぜ変えたか>"
 git push
 ```
 
-- **このリポジトリは現在 `feature/image-viewer` ブランチで作業している**。main に切り替えず、
-  **いまのブランチをそのままコミット & push** する
+- **main へ直接コミット & push するのがこのリポジトリの運用**(2026-09-23 にユーザーが決定)。
+  別ブランチにいる場合は、ユーザーに確認してから main へ fast-forward マージする
 - **force push はしない**(`--force` / `--force-with-lease` とも禁止)。拒否されたら止めて報告
 - `git add -A` / `git add .` で一括追加しない(未追跡の私物を巻き込む)
 
