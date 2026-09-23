@@ -20,14 +20,33 @@ export function el(tag, attrs = {}, ...children) {
 }
 
 // ---------- toasts ----------
-export function toast(message, kind = 'info', ms) {
+/**
+ * Show a toast. `actions` = [{label, onClick}] renders buttons (e.g. 元に戻す);
+ * clicking one runs it and dismisses the toast. Returns the element.
+ */
+export function toast(message, kind = 'info', ms, actions = []) {
   const root = document.getElementById('toasts');
   const t = el('div', { class: `toast ${kind}` }, message);
+  if (actions.length) {
+    const bar = el('div', { class: 'toast-actions' });
+    for (const a of actions) {
+      bar.append(el('button', {
+        class: 'btn small toast-action',
+        onclick: (e) => {
+          e.stopPropagation();
+          t.remove();
+          Promise.resolve().then(a.onClick).catch((err) => toastError(err));
+        },
+      }, a.label));
+    }
+    t.append(bar);
+  }
   root.append(t);
   while (root.children.length > 5) root.firstChild.remove();
-  const life = ms ?? (kind === 'error' ? 7000 : 3500);
+  const life = ms ?? (actions.length ? 10000 : kind === 'error' ? 7000 : 3500);
   setTimeout(() => t.remove(), life);
   t.addEventListener('click', () => t.remove());
+  return t;
 }
 
 export function toastError(e, prefix = '') {
@@ -87,10 +106,10 @@ export function isModalOpen() {
  * Generic modal. `build(close)` returns body content. Resolves with the value
  * passed to close() (undefined when dismissed via Esc/backdrop).
  */
-export function openModal({ title, body, buttons = [], onEnter, wide = false }) {
+export function openModal({ title, body, buttons = [], onEnter, wide = false, className = '' }) {
   return new Promise((resolve) => {
     const backdrop = el('div', { class: 'modal-backdrop' });
-    const box = el('div', { class: 'modal', style: wide ? { maxWidth: '92vw' } : null });
+    const box = el('div', { class: `modal${className ? ` ${className}` : ''}`, style: wide ? { maxWidth: '92vw' } : null });
     let done = false;
     const close = (value) => {
       if (done) return;
@@ -114,7 +133,8 @@ export function openModal({ title, body, buttons = [], onEnter, wide = false }) 
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(undefined); return; }
       if (e.key === 'Enter' && onEnter && e.target.tagName !== 'TEXTAREA' && !e.isComposing) {
-        if (e.target.closest && e.target.closest('.ac-list')) return;
+        // autocomplete lists and fields marked data-local-enter handle Enter themselves
+        if (e.target.closest && e.target.closest('.ac-list, [data-local-enter]')) return;
         e.preventDefault();
         onEnter(close);
       }

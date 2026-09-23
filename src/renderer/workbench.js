@@ -2,7 +2,7 @@
 // tab drag & drop, splitters, menus, image/folder opening and persistence.
 import { LayoutModel } from './layout-model.js';
 import { api, state, emit, on, saveSettings, isWin, samePath, remapUnder, pathUnder } from './state.js';
-import { el, showContextMenu } from './ui.js';
+import { el, showContextMenu, dirname } from './ui.js';
 import { keyLabel } from './commands.js';
 import { GalleryPane, defaultGalleryState } from './gallery.js';
 import { GraphPane } from './graph.js';
@@ -514,6 +514,31 @@ class Workbench {
     this.commit();
     const p = this.pane(tab.id);
     return p.loadPromise.then(() => p);
+  }
+
+  /**
+   * Quick Open Enter: open the image's folder in the MRU gallery (or a new
+   * gallery tab), select the image and scroll it into view. Filters that
+   * would hide it are cleared.
+   */
+  async revealInGallery(path) {
+    const dir = dirname(path);
+    const m = this.model;
+    let t = m.mruGallery();
+    if (!t) t = m.addTab(m.activeGroupId, { kind: 'gallery', state: defaultGalleryState({ kind: 'folder', path: dir }) });
+    m.activateTab(t.id);
+    this.commit();
+    const p = this.pane(t.id);
+    await p.loadPromise;
+    await p.setSource({ kind: 'folder', path: dir });
+    if (!p.view.some((it) => samePath(it.path, path))) {
+      if (p.search) p.setSearch('');
+      if (p.tagFilter.length) p.setTagFilter([]);
+    }
+    const hit = p.items.find((it) => samePath(it.path, path));
+    if (hit) p.selectPaths([hit.path], { emit: true, scroll: true });
+    saveSettings({ lastFolder: dir });
+    return p;
   }
 
   /** Graph tag double-click: filter the MRU gallery (or a new one). */

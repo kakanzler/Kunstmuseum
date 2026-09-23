@@ -221,11 +221,14 @@ function launch(phase) {
   });
 }
 
+// files the app itself created on request of the smoke run (watcher/index probe)
+const isProbe = (name) => /^km-smoke-added-/.test(name);
+
 function countFiles(d) {
   let n = 0;
   for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
     if (ent.isDirectory()) n += countFiles(path.join(d, ent.name));
-    else n++;
+    else if (!isProbe(ent.name)) n++;
   }
   return n;
 }

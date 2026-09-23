@@ -3,7 +3,8 @@
 // decoded before it is shown, so slides never flash. Broken files are skipped.
 import { api, state, saveSettings, setGlobalSelection, normKey, pathUnder } from './state.js';
 import { el, openModal, toast, toastError, fileUrl } from './ui.js';
-import { sortedTags } from './tags.js';
+import { fillTagSelect } from './tags.js';
+import { expandWithDescendants } from './tag-tree.js';
 import { Playlist } from './playlist.js';
 
 const HUD_MS = 2000;
@@ -83,14 +84,11 @@ export async function openScreenDialog(wb) {
     const folderSel = el('select', { class: 'input wide screen-folder' }, el('option', { value: '' }, '読み込み中…'));
     const includeSub = el('input', { type: 'checkbox', class: 'screen-include' });
     includeSub.checked = d.includeSub;
+    // indented category tree; a parent includes the images of its sub-categories
     const tagSel = el('select', { class: 'input wide screen-tag' });
-    for (const type of state.lib.tagTypes) {
-      const tags = sortedTags().filter((t) => t.typeId === type.id);
-      if (!tags.length) continue;
-      const g = el('optgroup', { label: type.name });
-      for (const t of tags) g.append(el('option', { value: t.id }, `${t.name}（${state.lib.usage[t.id] || 0}）`));
-      tagSel.append(g);
-    }
+    fillTagSelect(tagSel, {
+      count: (t) => `（${(state.lib.usageDeep && state.lib.usageDeep[t.id]) || state.lib.usage[t.id] || 0}）`,
+    });
     if (!tagSel.options.length) tagSel.append(el('option', { value: '' }, '（タグがありません）'));
     if (d.tagId && [...tagSel.options].some((o) => o.value === d.tagId)) tagSel.value = d.tagId;
     const interval = el('input', { type: 'number', class: 'input screen-interval', min: '1', max: '3600', step: '0.5', value: String(d.interval) });
@@ -142,7 +140,10 @@ export async function openScreenDialog(wb) {
       let items = [];
       try {
         if (target === 'folder') items = await api.scan(folderSel.value, includeSub.checked);
-        else items = (await api.listTagged()).filter((it) => (it.tags || []).includes(tagSel.value));
+        else {
+          const want = expandWithDescendants(state.lib.tags, [tagSel.value]);
+          items = (await api.listTagged()).filter((it) => (it.tags || []).some((id) => want.has(id)));
+        }
       } catch (e) {
         busy = false;
         toastError(e, '画像を読み込めませんでした。');

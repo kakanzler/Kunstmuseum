@@ -5,7 +5,8 @@ import {
   remapUnder, samePath, galleries, applyImageTags,
 } from './state.js';
 import { el, toast, toastError, showContextMenu, collator, thumbUrl, basename, debounce } from './ui.js';
-import { tagChip, sortedTags } from './tags.js';
+import { tagChip, fillTagSelect } from './tags.js';
+import { filterMatcher } from './tag-tree.js';
 import {
   checkFileName, renameFileTo, splitName, moveInto, draggedPaths, dragSource, startPathsDrag, DRAG_TYPE,
 } from './ops.js';
@@ -440,28 +441,29 @@ export class GalleryPane {
     }
     if (!this.tagFilter.length) this.chipsEl.append(el('span', { class: 'muted small' }, 'なし'));
     this.filterClearEl.classList.toggle('hidden', !this.tagFilter.length);
-    const sel = this.filterAddEl;
-    sel.innerHTML = '';
-    sel.append(el('option', { value: '' }, state.lib.tags.length ? '＋ タグを追加…' : '（タグがありません）'));
-    for (const type of state.lib.tagTypes) {
-      const tags = sortedTags().filter((t) => t.typeId === type.id && !this.tagFilter.includes(t.id));
-      if (!tags.length) continue;
-      const g = el('optgroup', { label: type.name });
-      for (const t of tags) g.append(el('option', { value: t.id }, `${t.name}（${state.lib.usage[t.id] || 0}）`));
-      sel.append(g);
-    }
+    // indented tree; the count includes descendants (a parent filter matches its subtree)
+    fillTagSelect(this.filterAddEl, {
+      blank: state.lib.tags.length ? '＋ タグを追加…' : '（タグがありません）',
+      exclude: new Set(this.tagFilter),
+      count: (t) => `（${(state.lib.usageDeep && state.lib.usageDeep[t.id]) || state.lib.usage[t.id] || 0}）`,
+    });
+  }
+
+  /** Quick Open 「表示中のギャラリーを絞り込む」: set the filename search box. */
+  setSearch(q) {
+    this.search = String(q || '');
+    this.searchEl.value = this.search;
+    this.applyView();
+    this.changed();
   }
 
   applyView({ keepScroll = false, scrollTop } = {}) {
     const q = this.search.trim().toLowerCase();
-    const filter = this.tagFilter;
+    // AND over filter tags; a parent tag also matches images tagged with its descendants
+    const matches = filterMatcher(state.lib.tags, this.tagFilter);
     const view = this.items.filter((it) => {
       if (q && !it.name.toLowerCase().includes(q)) return false;
-      if (filter.length) {
-        const tags = it.tags || [];
-        for (const id of filter) if (!tags.includes(id)) return false;
-      }
-      return true;
+      return matches(it.tags);
     });
     const key = this.sortKey;
     const dir = this.sortDir === 'desc' ? -1 : 1;

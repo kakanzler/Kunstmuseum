@@ -9,6 +9,7 @@ import { el, toast, toastError, showContextMenu, confirmDialog, basename, dirnam
 import {
   DRAG_TYPE, draggedPaths, moveInto, startPathsDrag, checkFileName, renameFileTo, renameFolderTo, splitName,
 } from './ops.js';
+import { openBulkEditor } from './bulk.js';
 
 const PAGE = 500;
 const $ = (id) => document.getElementById(id);
@@ -447,6 +448,7 @@ function onContextMenu(e) {
   const items = [];
   if (exists) {
     items.push({ label: '新しいギャラリータブで開く', action: () => ctx.openFolder(path, { newTab: true }) });
+    items.push({ label: 'カテゴリを一括編集…', action: () => openBulkEditor({ folder: path, includeSub: true }) });
     items.push({ label: '名前の変更', action: () => startRename(path) });
     items.push({ label: 'エクスプローラーで表示', action: () => api.openPath(path) });
   }
@@ -618,6 +620,12 @@ export function handleKey(e) {
     default:
       return false;
   }
+}
+
+/** Folder row focused in the tree (for カテゴリ一括編集), or null. */
+export function focusedFolder() {
+  const cur = rows.find((r) => r.path === focusPath);
+  return cur && cur.type === 'folder' && cur.exists !== false ? cur.path : null;
 }
 
 /** 名前の変更 command while the tree has focus: inline rename of the focused row. */

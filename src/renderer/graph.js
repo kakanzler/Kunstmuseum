@@ -6,7 +6,12 @@ import { el, toastError, thumbUrl, basename, extname, collator } from './ui.js';
 
 function graphSettings() {
   const g = state.settings.graph || {};
-  return { scope: g.scope || 'folder', mode: g.mode || 'bipartite', hiddenTypes: Array.isArray(g.hiddenTypes) ? g.hiddenTypes : [] };
+  return {
+    scope: g.scope || 'folder',
+    mode: g.mode || 'bipartite',
+    hiddenTypes: Array.isArray(g.hiddenTypes) ? g.hiddenTypes : [],
+    compound: g.compound !== false, // 階層をまとめる (default ON)
+  };
 }
 function saveGraph(partial) {
   saveSettings({ graph: { ...graphSettings(), ...partial } });
@@ -41,6 +46,7 @@ export class GraphPane {
           <button data-mode="bipartite">画像+タグ</button>
           <button data-mode="cooccur">タグ共起のみ</button>
         </div>
+        <label class="toggle" title="子カテゴリを親カテゴリの枠内にまとめる（OFF: 親→子を点線で結ぶ）"><input class="graph-compound" type="checkbox"> 階層をまとめる</label>
         <div class="type-checks graph-types"></div>
         <input class="input search graph-search" type="search" placeholder="ノードを検索（Enter）" spellcheck="false">
         <button class="btn graph-relayout">レイアウト再計算</button>
@@ -61,6 +67,9 @@ export class GraphPane {
     this.statusEl = q('.graph-status');
 
     const gs = graphSettings();
+    this.compoundEl = this.el.querySelector('.graph-compound');
+    this.compoundEl.checked = gs.compound;
+    this.compoundEl.addEventListener('change', () => { saveGraph({ compound: this.compoundEl.checked }); this.rebuild(); });
     this.scopeEl.value = gs.scope;
     this.scopeEl.addEventListener('change', () => { saveGraph({ scope: this.scopeEl.value }); this.rebuild(); });
     for (const b of this.modeEl.querySelectorAll('button')) {
@@ -155,6 +164,11 @@ export class GraphPane {
     return this.cy ? this.cy.nodes().length : 0;
   }
 
+  /** Compound (parent category) nodes currently shown — for the smoke test. */
+  compoundCount() {
+    return this.cy ? this.cy.nodes(':parent').length : 0;
+  }
+
   // ---------- building ----------
   renderTypeChecks() {
     const hidden = new Set(graphSettings().hiddenTypes);
@@ -212,13 +226,28 @@ export class GraphPane {
     images.sort((a, b) => collator.compare(basename(a.path), basename(b.path)));
     this.imageList = images.map((im) => ({ path: im.path, name: basename(im.path), ext: extname(basename(im.path)) }));
 
-    for (const [id, count] of counts) {
+    // tag nodes: every used tag plus its ancestors (parents are shown even
+    // without direct images so the hierarchy is visible)
+    const included = new Set(counts.keys());
+    for (const id of counts.keys()) {
+      let p = tagMap.get(id);
+      let guard = 0;
+      while (p && p.parentId && tagMap.has(p.parentId) && guard++ < 100) {
+        included.add(p.parentId);
+        p = tagMap.get(p.parentId);
+      }
+    }
+    const compound = gs.compound;
+    for (const id of included) {
       const t = tagMap.get(id);
-      elements.push({
-        group: 'nodes',
-        data: { id: `t:${id}`, kind: 'tag', tagId: id, label: t.name, color: typeColor.get(t.typeId) || '#888', size: tagSize(count), count },
-        classes: 'tag',
-      });
+      const count = counts.get(id) || 0;
+      const data = { id: `t:${id}`, kind: 'tag', tagId: id, label: t.name, color: typeColor.get(t.typeId) || '#888', size: tagSize(count), count };
+      const hasParent = t.parentId && included.has(t.parentId);
+      if (compound && hasParent) data.parent = `t:${t.parentId}`;
+      elements.push({ group: 'nodes', data, classes: 'tag' });
+      if (!compound && hasParent) {
+        elements.push({ group: 'edges', data: { id: `h:${t.parentId}:${id}`, source: `t:${t.parentId}`, target: `t:${id}`, width: 1.5 }, classes: 'hier' });
+      }
     }
     if (gs.mode === 'bipartite') {
       images.forEach((im, i) => {
@@ -285,6 +314,15 @@ export class GraphPane {
         },
         { selector: 'node.tag', style: { 'background-color': 'data(color)', width: 'data(size)', height: 'data(size)', 'border-width': 1.5, 'border-color': '#0e0e0f' } },
         {
+          // compound parent category: a translucent frame around its sub-categories
+          selector: 'node.tag:parent',
+          style: {
+            shape: 'round-rectangle', 'background-opacity': 0.12, 'border-width': 1.5, 'border-color': 'data(color)',
+            'border-opacity': 0.8, 'text-valign': 'top', 'text-halign': 'center', 'text-margin-y': -4, padding: 14, 'font-size': 12,
+          },
+        },
+        { selector: 'edge.hier', style: { 'line-style': 'dashed', 'line-color': '#8a8a92', 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'target-arrow-color': '#8a8a92', 'arrow-scale': 0.7, opacity: 0.7 } },
+        {
           selector: 'node.image',
           style: {
             shape: 'round-rectangle', width: 26, height: 26, label: '', 'background-color': '#2a2a2f',
@@ -343,24 +381,50 @@ export class GraphPane {
   runLayout() {
     if (!this.cy || !this.cy.nodes().length) return;
     this.stopLayout();
-    const n = this.cy.nodes().length;
-    const run = this.cy.layout({
+    const cy = this.cy;
+    const n = cy.nodes().length;
+    const base = {
       name: 'cose',
-      animate: n <= 300,
-      animationDuration: 500,
       randomize: true,
-      fit: true,
       padding: 40,
       nodeRepulsion: () => 9000,
-      idealEdgeLength: () => 70,
       nodeOverlap: 8,
       componentSpacing: 80,
       gravity: 0.6,
       numIter: n > 1500 ? 300 : 1000,
+    };
+    const parentOf = new Map();
+    cy.nodes().forEach((node) => { if (node.data('parent')) parentOf.set(node.id(), node.data('parent')); });
+
+    if (!parentOf.size) {
+      const run = cy.layout({ ...base, animate: n <= 300, animationDuration: 500, fit: true, idealEdgeLength: () => 70 });
+      this.layoutRun = run;
+      run.one('layoutstop', () => { if (this.layoutRun === run) this.layoutRun = null; });
+      run.run();
+      return;
+    }
+
+    // Compound (階層をまとめる): cytoscape's built-in cose is numerically unstable
+    // with compound nodes — positions drift to ±1e7 or NaN and nothing is drawn.
+    // Lay out a flat copy instead: lift children out of their parents, tie each
+    // child to its parent with a temporary spring, run cose synchronously (no
+    // animation frames can outlive a destroy), then re-parent. The compound
+    // frames are then derived from their children's positions.
+    cy.batch(() => {
+      for (const [id, p] of parentOf) {
+        cy.getElementById(id).move({ parent: null });
+        cy.add({ group: 'edges', data: { id: `tmp:${id}`, source: id, target: p, width: 0 }, classes: 'layout-tmp' });
+      }
     });
-    this.layoutRun = run;
-    run.one('layoutstop', () => { if (this.layoutRun === run) this.layoutRun = null; });
+    const run = cy.layout({ ...base, animate: false, fit: false, idealEdgeLength: (e) => (e.hasClass('layout-tmp') ? 40 : 70) });
     run.run();
+    cy.batch(() => {
+      cy.edges('.layout-tmp').remove();
+      for (const [id, p] of parentOf) cy.getElementById(id).move({ parent: p });
+    });
+    const finite = cy.nodes().every((node) => Number.isFinite(node.position('x')) && Number.isFinite(node.position('y')));
+    if (!finite) cy.layout({ name: 'grid', fit: false, padding: 40 }).run(); // last-resort fallback
+    cy.fit(undefined, 40);
   }
 
   fit() {

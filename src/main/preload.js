@@ -54,6 +54,9 @@ contextBridge.exposeInMainWorld('api', {
   mergeTag: call('lib:mergeTag'),
   deleteTag: call('lib:deleteTag'),
   getImageTags: call('images:getTags'),
+  bulkApplyTags: call('images:bulkApply'),
+  restoreTags: call('images:restoreTags'),
+  searchIndex: call('index:search'),
   addImageTags: call('images:addTags'),
   removeImageTags: call('images:removeTags'),
   graphData: call('graph:data'),
@@ -65,5 +68,6 @@ contextBridge.exposeInMainWorld('api', {
   screenExit: call('screen:exit'),
   isFullScreen: call('win:isFullScreen'),
 
+  smokeCopyFixture: call('smoke:copyFixture'), // only registered in smoke mode
   smokeReport: (report) => ipcRenderer.send('smoke:report', report),
 });

@@ -11,6 +11,8 @@ export const COMMANDS = [
   { id: 'graph.showRight', label: '知識グラフを右に表示', category: '表示', default: 'Alt+Q' },
   { id: 'screen.open', label: 'スクリーン表示', category: '表示', default: 'Ctrl+Alt+Shift+O' },
   { id: 'settings.open', label: '設定を開く', category: '全般', default: 'Ctrl+,' },
+  { id: 'search.quickOpen', label: 'ファイル名で検索（全フォルダ）', category: '全般', default: 'Ctrl+F' },
+  { id: 'tags.bulkFolder', label: 'フォルダのカテゴリを一括編集', category: '編集', default: 'Alt+Shift+C' },
   { id: 'tab.close', label: 'タブを閉じる', category: 'タブ', default: 'Ctrl+W' },
   { id: 'tab.splitRight', label: '右に分割', category: 'タブ', default: 'Ctrl+\\' },
   { id: 'tab.next', label: '次のタブ', category: 'タブ', default: 'Ctrl+Tab' },

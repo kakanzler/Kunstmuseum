@@ -8,6 +8,10 @@ const {
 } = require('electron');
 const fsops = require('./fsops');
 const { Store } = require('./store');
+const { FileIndex } = require('./file-index');
+
+// Quick Open (Ctrl+F) index of all images below the registered roots
+const fileIndex = new FileIndex();
 
 // ---------------------------------------------------------------------------
 // Smoke-test mode: isolated userData, fixture folder, exit code 0/1.
@@ -180,7 +184,10 @@ function queueChange(dir) {
   changeTimer = setTimeout(() => {
     const dirs = [...changedDirs];
     changedDirs.clear();
-    if (mainWindow && !mainWindow.isDestroyed() && dirs.length) mainWindow.webContents.send('fs:changed', dirs);
+    if (!dirs.length) return;
+    // the index re-lists exactly the directories of this batch (no root rescans)
+    fileIndex.updateDirs(dirs).catch((e) => console.error('[index] update failed', e));
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('fs:changed', dirs);
   }, 500);
 }
 
@@ -221,6 +228,7 @@ function syncWatchers() {
   const want = new Map(store.getRoots().map((r) => [fsops.normKey(r), r]));
   for (const [key, e] of [...watchers]) if (!want.has(key)) unwatchRoot(e.root);
   for (const r of want.values()) watchRoot(r);
+  fileIndex.setRoots([...want.values()]);
 }
 
 function stopAllWatchers() {
@@ -232,7 +240,7 @@ function stopAllWatchers() {
 // IPC
 // ---------------------------------------------------------------------------
 function libSnapshot() {
-  return { tagTypes: store.listTagTypes(), tags: store.listTags(), usage: store.tagUsage() };
+  return { tagTypes: store.listTagTypes(), tags: store.listTags(), usage: store.tagUsage(), usageDeep: store.tagUsageDeep() };
 }
 
 function rootsInfo() {
@@ -337,7 +345,10 @@ function registerIpc() {
   handle('fs:renameFile', async (p, newName) => {
     const src = assertInRoots(p, 'ファイル');
     const r = await fsops.renamePath(src, newName);
-    if (r.changed) store.renameImageKey(r.from, r.to);
+    if (r.changed) {
+      store.renameImageKey(r.from, r.to);
+      fileIndex.renamePath(r.from, r.to);
+    }
     return r;
   });
   handle('fs:renameDir', async (p, newName) => {
@@ -348,7 +359,10 @@ function registerIpc() {
     let r;
     try {
       r = await fsops.renamePath(src, newName);
-      if (r.changed) store.renameFolderPrefix(r.from, r.to);
+      if (r.changed) {
+        store.renameFolderPrefix(r.from, r.to);
+        fileIndex.renameDir(r.from, r.to);
+      }
     } finally {
       syncWatchers();
     }
@@ -358,7 +372,10 @@ function registerIpc() {
     const dest = assertInRoots(destDir, '移動先');
     const srcs = (Array.isArray(paths) ? paths : []).map((p) => assertInRoots(p, '移動元'));
     const r = await fsops.moveFiles(srcs, dest);
-    for (const m of r.moved) store.renameImageKey(m.from, m.to);
+    for (const m of r.moved) {
+      store.renameImageKey(m.from, m.to);
+      fileIndex.renamePath(m.from, m.to);
+    }
     return r;
   });
 
@@ -379,6 +396,21 @@ function registerIpc() {
   handle('lib:updateTag', (id, t) => { store.updateTag(id, t || {}); return libSnapshot(); });
   handle('lib:mergeTag', (src, dst) => { store.mergeTags(src, dst); return libSnapshot(); });
   handle('lib:deleteTag', (id) => { store.deleteTag(id); return libSnapshot(); });
+  // カテゴリ一括編集: one batch, returns the previous tag lists for 元に戻す
+  handle('images:bulkApply', (paths, addIds, removeIds) => {
+    const ps = (Array.isArray(paths) ? paths : []).map((p) => assertInRoots(p, '画像'));
+    const before = store.bulkApply(ps, Array.isArray(addIds) ? addIds : [], Array.isArray(removeIds) ? removeIds : []);
+    return { before, tags: store.getTagsFor(ps), lib: libSnapshot() };
+  });
+  handle('images:restoreTags', (snapshot) => {
+    const snap = {};
+    for (const [p, ids] of Object.entries(snapshot || {})) snap[assertInRoots(p, '画像')] = ids;
+    return { tags: store.restoreTags(snap), lib: libSnapshot() };
+  });
+  handle('index:search', async (query, limit) => {
+    fileIndex.build();
+    return fileIndex.search(String(query || ''), Math.max(1, Math.min(500, Number(limit) || 100)));
+  });
   handle('images:getTags', (paths) => store.getTagsFor(Array.isArray(paths) ? paths : []));
   handle('images:addTags', (paths, tagIds) => ({
     tags: store.addTagsToImages((paths || []).map((p) => assertInRoots(p, '画像')), tagIds || []),
@@ -412,6 +444,21 @@ function registerIpc() {
   handle('win:isFullScreen', () => !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()));
 
   ipcMain.on('smoke:report', (_ev, report) => smokeFinish(report));
+
+  // smoke only: create a NEW file inside the smoke fixture folder (COPYFILE_EXCL:
+  // never overwrites) so the watcher → Quick Open index path can be verified
+  if (SMOKE && process.env.KM_SMOKE_DIR) {
+    handle('smoke:copyFixture', async (src, newName) => {
+      const dir = path.resolve(process.env.KM_SMOKE_DIR);
+      const from = path.resolve(String(src));
+      const to = path.join(path.dirname(from), String(newName));
+      if (!fsops.isInside(dir, from) || !fsops.isInside(dir, to) || !/^km-smoke-added-/.test(path.basename(to))) {
+        throw new Error('smoke:copyFixture is limited to the smoke fixture folder');
+      }
+      await fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+      return to;
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +666,7 @@ if (!gotLock) {
     registerIpc();
     syncWatchers();
     createWindow();
+    setTimeout(() => fileIndex.build().catch((e) => console.error('[index] build failed', e)), 1500);
   });
 
   app.on('window-all-closed', () => {

@@ -9,6 +9,8 @@ import { wb } from './workbench.js';
 import { openScreenDialog, isScreenActive } from './screen.js';
 import { initKeymap, registerCommands, commandForEvent, runCommand, keyLabel } from './commands.js';
 import { toggleSettings, isSettingsOpen } from './settings.js';
+import { openQuickOpen, isQuickOpenOpen } from './quickopen.js';
+import { openBulkEditor } from './bulk.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -79,7 +81,7 @@ function onKeyDown(e) {
     if (id === 'settings.open') { e.preventDefault(); toggleSettings(settingsCtx); }
     return;
   }
-  if (isModalOpen()) return;
+  if (isModalOpen() || isQuickOpenOpen()) return;
   if (isEditable(e.target)) return;
   if (id) {
     e.preventDefault();
@@ -114,6 +116,8 @@ function registerAllCommands() {
     },
     'edit.selectAll': () => { if (!sidebar.hasFocus() && pane() && pane().selectAll) pane().selectAll(); },
     'view.resetZoom': () => { if (pane()) pane().resetZoom(); },
+    'search.quickOpen': () => openQuickOpen(wb),
+    'tags.bulkFolder': () => openBulkForCurrentFolder(),
     'view.refresh': () => {
       const p = pane();
       if (p && p.kind === 'gallery') p.reload();
@@ -121,6 +125,24 @@ function registerAllCommands() {
       emit('refresh-requested');
     },
   });
+}
+
+/**
+ * カテゴリ一括編集 target: the folder focused in the sidebar tree, else the
+ * active (or MRU) gallery's folder. The virtual 全フォルダ view has no folder.
+ */
+function openBulkForCurrentFolder() {
+  if (sidebar.hasFocus()) {
+    const f = sidebar.focusedFolder();
+    if (f) { openBulkEditor({ folder: f, includeSub: true }); return; }
+  }
+  const p = wb.activePane();
+  const g = p && p.kind === 'gallery' ? p : wb.mruGalleryPane();
+  if (!g || !g.source || g.source.kind !== 'folder') {
+    toast('フォルダを選択してください', 'error');
+    return;
+  }
+  openBulkEditor({ folder: g.source.path, includeSub: g.includeSub });
 }
 
 /** Top-bar hint, rendered from the current bindings. */

@@ -11,6 +11,10 @@ import { isCapturing } from './settings.js';
 import { bindings } from './commands.js';
 import { toOverrides } from './keymap.js';
 import { flushSettings } from './state.js';
+import { quickOpenState } from './quickopen.js';
+import { bulkEditorState } from './bulk.js';
+import { addTagsToPaths as addTags } from './tags.js';
+import { dirname } from './ui.js';
 import { fileUrl } from './ui.js';
 
 const TAB_TYPE = 'application/x-km-tab';
@@ -370,6 +374,9 @@ async function phase1({ wb, sidebar, step, report }) {
   // 18. 設定 and the editable keymap
   await settingsChecks({ wb, g, galleryTabId, step, report });
 
+  // 19–22. settings size, Quick Open, bulk category edit, category hierarchy
+  await featureChecks({ wb, g, galleryTabId, sidebar, tagId, expect, step, report });
+
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
   const back = LayoutModel.restore(ser, { caseInsensitive: state.info.platform === 'win32' }).serialize((t) => t.state);
@@ -392,6 +399,13 @@ async function phase2({ wb, savedLayout, step, report }) {
   report.restored = kinds(wb);
   assert(sameJson(comparable(now), comparable(savedLayout)), `restored layout differs:\n${JSON.stringify(comparable(now))}\n${JSON.stringify(comparable(savedLayout))}`);
   assert(wb.model.allTabs().some((t) => t.kind === 'image'), 'image tab restored');
+
+  // category hierarchy from phase 1 survived the relaunch
+  const shiba = state.lib.tags.find((t) => t.name === '柴犬');
+  const dog = shiba && state.lib.tags.find((t) => t.id === shiba.parentId);
+  const animal = dog && state.lib.tags.find((t) => t.id === dog.parentId);
+  assert(shiba && dog && dog.name === '犬' && animal && animal.name === '動物' && animal.parentId === null, 'hierarchy persisted');
+  step('category hierarchy persisted: ' + [animal.name, dog.name, shiba.name].join(' > '));
 
   // keymap override from phase 1 survived the relaunch
   assert(bindings().get('graph.showRight') === 'Ctrl+Alt+P', 'override restored (' + bindings().get('graph.showRight') + ')');
@@ -605,4 +619,177 @@ async function settingsChecks({ wb, g, galleryTabId, step, report }) {
   const saved = (await api.getSettings()).keybindings;
   assert(sameJson(saved, { 'graph.showRight': 'Ctrl+Alt+P' }), 'persisted overrides ' + JSON.stringify(saved));
   step('既定に戻す ok; override persisted {graph.showRight: Ctrl+Alt+P}');
+}
+
+const raf2 = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+const toastWith = (text) => [...document.querySelectorAll('.toast')].find((t) => t.textContent.includes(text));
+
+async function featureChecks({ wb, g, galleryTabId, sidebar, tagId, expect, step, report }) {
+  const esc = () => key({ key: 'Escape', code: 'Escape' });
+  const root = state.roots[0].path;
+
+  // ---- §1 settings modal keeps one size across sections ----
+  key({ key: ',', code: 'Comma', ctrlKey: true });
+  const sm = await waitFor(() => document.querySelector('.modal.settings-modal'), 3000, '設定');
+  const rects = [];
+  for (const sec of ['hotkeys', 'guide', 'general', 'hotkeys']) {
+    sm.querySelector('.settings-nav-item[data-section="' + sec + '"]').click();
+    await raf2();
+    const r = sm.getBoundingClientRect();
+    rects.push([Math.round(r.width), Math.round(r.height)]);
+  }
+  assert(rects.every((r) => r[0] === rects[0][0] && r[1] === rects[0][1]), 'settings size changed ' + JSON.stringify(rects));
+  esc();
+  await waitFor(() => !document.querySelector('.modal.settings-modal'), 3000, '設定 closed');
+  step('settings modal size fixed across sections ' + rects[0].join('x'));
+
+  // ---- §2 Quick Open ----
+  const qo = () => quickOpenState();
+  const qoType = (text) => { qo().input.value = text; qo().input.dispatchEvent(new Event('input', { bubbles: true })); };
+  const qoKey = (init) => qo().input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }));
+  const files = () => (qo() ? qo().rows.filter((r) => r.kind === 'file') : []);
+  const openQo = async () => {
+    wb.activate(galleryTabId);
+    g.grid.focus({ preventScroll: true });
+    key({ key: 'f', code: 'KeyF', ctrlKey: true });
+    return waitFor(qo, 2000, 'palette open');
+  };
+
+  const savedPrimary = state.selection.primary;
+  await openQo();
+  const t0 = performance.now();
+  qoType('png');
+  await waitFor(() => files().length >= 2 && !qo().building, 20000, 'png results');
+  report.quickOpen = { firstResultsMs: Math.round(performance.now() - t0), indexed: qo().count };
+  assert(qo().count >= expect, 'index holds every fixture image (' + qo().count + ' < ' + expect + ')');
+  const a0 = qo().active;
+  qoKey({ key: 'ArrowDown', code: 'ArrowDown' });
+  const row = qo().rows[qo().active];
+  assert(qo().active === a0 + 1 && row.kind === 'file', 'ArrowDown moved');
+  assert(state.selection.primary === row.item.path, 'global selection follows the highlighted result');
+  const pv = wb.model.findSingleton('preview');
+  if (pv) await waitFor(() => document.querySelector('.etab[data-tab="' + pv.id + '"]').textContent.includes(row.item.name), 3000, 'Preview follows');
+  qoKey({ key: 'Escape', code: 'Escape' });
+  assert(!qo(), 'Esc closed the palette');
+  assert(state.selection.primary === savedPrimary, 'Esc restored the previous selection');
+
+  // Enter: a hit in another folder opens that folder in the MRU gallery and selects it
+  await openQo();
+  qoType('deep');
+  await waitFor(() => files().some((r) => r.item.name === 'deep.PNG'), 5000, 'deep.PNG hit');
+  const deep = files().find((r) => r.item.name === 'deep.PNG').item;
+  assert(!samePath(dirname(deep.path), g.source.path), 'hit is in another folder than the gallery');
+  while (qo().rows[qo().active].item?.path !== deep.path) qoKey({ key: 'ArrowDown', code: 'ArrowDown' });
+  qoKey({ key: 'Enter', code: 'Enter' });
+  await waitFor(() => !qo(), 2000, 'palette closed by Enter');
+  const mg = wb.mruGalleryPane();
+  await waitFor(() => mg.source && samePath(mg.source.path, dirname(deep.path)) && mg.selection.has(deep.path), 5000, 'gallery shows the folder with the image selected');
+  assert(state.selection.primary === deep.path, 'Enter made it the global selection');
+
+  // Ctrl+Enter: pinned image tab
+  await openQo();
+  qoType('deep');
+  await waitFor(() => files().some((r) => r.item.path === deep.path), 5000, 'deep hit again');
+  while (qo().rows[qo().active].item?.path !== deep.path) qoKey({ key: 'ArrowDown', code: 'ArrowDown' });
+  qoKey({ key: 'Enter', code: 'Enter', ctrlKey: true });
+  await waitFor(() => wb.model.findImageTab(deep.path), 3000, 'Ctrl+Enter opened an image tab');
+
+  // first row narrows the active gallery
+  await wb.openFolder(root);
+  await openQo();
+  qoType('anim');
+  await waitFor(() => files().length >= 1, 5000, 'anim hit');
+  while (qo().active > 0) qoKey({ key: 'ArrowUp', code: 'ArrowUp' });
+  assert(qo().rows[0].kind === 'filter', 'filter row first');
+  qoKey({ key: 'Enter', code: 'Enter' });
+  await waitFor(() => g.search === 'anim' && g.view.length >= 1 && g.view.every((it) => it.name.toLowerCase().includes('anim')), 3000, 'gallery narrowed');
+  g.setSearch('');
+
+  // watcher → index: a new file appears without any root rescan
+  const src = g.items.find((it) => it.ext === '.bmp') || g.items[0];
+  const added = await api.smokeCopyFixture(src.path, 'km-smoke-added-probe' + src.ext);
+  await waitForAsync(async () => (await api.searchIndex('km-smoke-added-probe', 10)).results.some((r) => samePath(r.path, added)), 8000, 'new file indexed via the watcher');
+  step('Quick Open: ' + report.quickOpen.indexed + ' indexed, first results ' + report.quickOpen.firstResultsMs + ' ms; ↓ drives Preview, Esc restores, Enter opens the folder, Ctrl+Enter pins, filter row, watcher updates the index');
+
+  // ---- §3 bulk category edit ----
+  await wb.openFolder(root);
+  const rootRow = document.querySelector('.tree-row.folder[data-path="' + CSS.escape(root) + '"]');
+  rootRow.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await waitFor(() => sidebar.hasFocus() && samePath(sidebar.focusedFolder() || '', root), 3000, 'root folder focused in the tree');
+  key({ key: 'C', code: 'KeyC', altKey: true, shiftKey: true });
+  const bs = await waitFor(() => bulkEditorState() && !bulkEditorState().loading && bulkEditorState(), 8000, 'bulk editor loaded');
+  assert(samePath(bs.folder, root) && bs.includeSub, 'bulk target = focused sidebar folder, subfolders on');
+  const dlg = document.querySelector('.modal.bulk-modal');
+  const paths = bs.items.map((it) => it.path);
+  const rowFor = (id) => dlg.querySelector('.bulk-row[data-tag="' + id + '"]');
+  assert(/^一部 \d+ 件$/.test(rowFor(tagId).querySelector('.bulk-state').textContent), 'state shows 一部 n 件: ' + rowFor(tagId).querySelector('.bulk-state').textContent);
+  rowFor(tagId).querySelector('.bulk-action').click(); // 付与
+  rowFor(tagId).querySelector('.bulk-action').click(); // 削除
+  assert(bs.actions.get(tagId) === 'remove', 'cycled to 削除');
+  dlg.querySelector('.bulk-new-name').value = '一括テスト';
+  dlg.querySelector('.bulk-new-btn').click();
+  const newTag = await waitFor(() => state.lib.tags.find((t) => t.name === '一括テスト'), 3000, 'category created inline');
+  await waitFor(() => bs.actions.get(newTag.id) === 'add', 2000, 'new category marked 付与');
+  assert(dlg.querySelector('.bulk-summary').textContent === '付与 1 件・削除 1 件 → 対象 ' + paths.length + ' 枚', 'summary: ' + dlg.querySelector('.bulk-summary').textContent);
+  const before = await api.getImageTags(paths);
+  dlg.querySelector('.modal-foot .btn.primary').click();
+  await waitFor(() => !document.querySelector('.modal.bulk-modal'), 5000, 'bulk applied');
+  const after = await api.getImageTags(paths);
+  assert(paths.every((p) => after[p].includes(newTag.id) && !after[p].includes(tagId)), 'applied to every image');
+  const undo = await waitFor(() => toastWith('枚に適用しました'), 3000, 'undo toast');
+  undo.querySelector('.toast-action').click();
+  await waitForAsync(async () => sameJson(await api.getImageTags(paths), before), 5000, '元に戻す restored the tags');
+  // the virtual 全フォルダ view has no folder
+  await wb.openTagged();
+  g.grid.focus({ preventScroll: true });
+  key({ key: 'C', code: 'KeyC', altKey: true, shiftKey: true });
+  await waitFor(() => toastWith('フォルダを選択してください'), 3000, 'virtual-view toast');
+  assert(!document.querySelector('.modal.bulk-modal'), 'no bulk editor on the virtual view');
+  await wb.openFolder(root);
+  step('bulk edit: ' + paths.length + ' images, 付与+削除 applied, 元に戻す restored, virtual view refused');
+
+  // ---- §4 category hierarchy ----
+  const type0 = state.lib.tagTypes[0].id;
+  const animal = (await api.addTag({ name: '動物', typeId: type0 })).tag;
+  const dog = (await api.addTag({ name: '犬', parentId: animal.id })).tag;
+  const r3 = await api.addTag({ name: '柴犬', parentId: dog.id });
+  setLib(r3.lib);
+  const shiba = r3.tag;
+  const target = g.items.find((it) => !(it.tags || []).length) || g.items[0];
+  await addTags([target.path], [shiba.id]);
+  g.setTagFilter([animal.id]);
+  await waitFor(() => g.view.some((it) => it.path === target.path), 3000, 'parent filter matches the grandchild-tagged image');
+  assert(g.view.every((it) => (it.tags || []).some((id) => [animal.id, dog.id, shiba.id].includes(id))), 'only subtree images match');
+  g.setTagFilter([]);
+  const tm = openTagManager();
+  const tmRow = await waitFor(() => document.querySelector('.modal .tm-tag-row[data-tag="' + shiba.id + '"]'), 3000, 'tag manager tree');
+  assert(tmRow.dataset.depth === '2', 'grandchild indented at depth 2');
+  assert(document.querySelector('.modal .tm-tag-row[data-tag="' + shiba.id + '"] .tm-usage').textContent.startsWith('直接 1'), 'usage label');
+  esc();
+  await tm;
+  // graph: compound nodes, toggle, and closing while the layout may still run
+  wb.activate(galleryTabId);
+  g.grid.focus({ preventScroll: true });
+  // the graph shortcut was rebound earlier in this run (keymap step) → call the command itself
+  wb.showSingletonRight('graph');
+  const gt = wb.model.findSingleton('graph');
+  const gp = wb.pane(gt.id);
+  await waitFor(() => gp.compoundCount() >= 2, 10000, 'compound category nodes');
+  const cmp = gp.compoundCount();
+  // the layout must actually be drawable (cose used to blow compound graphs up to ±1e7 / NaN)
+  const posOk = () => gp.cy.nodes().every((nd) => {
+    const { x, y } = nd.position();
+    return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) < 1e5 && Math.abs(y) < 1e5;
+  });
+  assert(posOk(), 'compound layout positions are finite and bounded');
+  assert(gp.cy.zoom() > gp.cy.minZoom() + 1e-6, 'fit did not collapse to the minimum zoom (' + gp.cy.zoom() + ')');
+  gp.el.querySelector('.graph-compound').click();
+  await waitFor(() => gp.cy && gp.cy.edges('.hier').length >= 2 && gp.compoundCount() === 0, 10000, 'hierarchy as dashed edges');
+  gp.el.querySelector('.graph-compound').click();
+  await waitFor(() => gp.compoundCount() >= 2, 10000, 'compound again');
+  assert(posOk(), 'positions still bounded after toggling');
+  wb.closeTab(gt.id);
+  await sleep(400);
+  report.hierarchy = { animal: animal.id, dog: dog.id, shiba: shiba.id };
+  step('hierarchy: 動物 > 犬 > 柴犬; parent filter matches; tag manager tree; graph compound ' + cmp + ' (toggle ok)');
 }

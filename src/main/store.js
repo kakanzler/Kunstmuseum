@@ -133,9 +133,31 @@ class Store {
     if (!out.tagTypes.length) out.tagTypes = def.tagTypes;
     const typeIds = new Set(out.tagTypes.map((t) => t.id));
     if (Array.isArray(d.tags)) {
+      const seen = new Set();
       for (const t of d.tags) {
-        if (!t || !t.id || typeof t.name !== 'string') continue;
-        out.tags.push({ id: t.id, name: t.name, typeId: typeIds.has(t.typeId) ? t.typeId : out.tagTypes[0].id });
+        if (!t || !t.id || typeof t.name !== 'string' || seen.has(t.id)) continue;
+        seen.add(t.id);
+        out.tags.push({
+          id: t.id,
+          name: t.name,
+          typeId: typeIds.has(t.typeId) ? t.typeId : out.tagTypes[0].id,
+          parentId: typeof t.parentId === 'string' ? t.parentId : null, // older libraries: no parentId -> root
+        });
+      }
+    }
+    // a parent must exist, differ from the tag and share its type; cycles are cut
+    const byId = new Map(out.tags.map((t) => [t.id, t]));
+    for (const t of out.tags) {
+      const p = t.parentId && byId.get(t.parentId);
+      if (!p || p.id === t.id || p.typeId !== t.typeId) t.parentId = null;
+    }
+    for (const t of out.tags) {
+      const up = new Set([t.id]);
+      let cur = t;
+      while (cur.parentId) {
+        if (up.has(cur.parentId)) { cur.parentId = null; break; }
+        up.add(cur.parentId);
+        cur = byId.get(cur.parentId);
       }
     }
     const tagIds = new Set(out.tags.map((t) => t.id));
@@ -295,58 +317,120 @@ class Store {
     return t;
   }
 
-  findTag(name, typeId) {
+  /** Same name (case-insensitive) under the same parent within a type. */
+  findTag(name, typeId, parentId = null) {
     const n = String(name).trim().toLowerCase();
-    return clone(this.data.tags.find((t) => t.typeId === typeId && t.name.toLowerCase() === n));
+    return clone(this.data.tags.find((t) => t.typeId === typeId && (t.parentId || null) === (parentId || null) && t.name.toLowerCase() === n));
   }
 
-  /** Creates a tag, or returns the existing one with the same name and type. */
-  addTag({ name, typeId }) {
+  /** Ids of all descendants of `id` (cycle-safe). */
+  _descendants(id) {
+    const out = new Set();
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const t of this.data.tags) {
+        if (t.parentId === cur && t.id !== id && !out.has(t.id)) { out.add(t.id); stack.push(t.id); }
+      }
+    }
+    return out;
+  }
+
+  /** Validated parent for a tag of type `typeId` (null = root). */
+  _checkParent(parentId, typeId, selfId = null) {
+    if (!parentId) return null;
+    const p = this._tag(parentId);
+    if (p.typeId !== typeId) throw new StoreError('親カテゴリは同じ種類から選んでください。');
+    if (selfId && (parentId === selfId || this._descendants(selfId).has(parentId))) {
+      throw new StoreError('自分自身や子孫を親にすることはできません。');
+    }
+    return parentId;
+  }
+
+  /**
+   * Creates a tag, or returns the existing one with the same name under the
+   * same parent (動物>犬 and ペット>犬 may coexist). A parent implies its type.
+   */
+  addTag({ name, typeId, parentId = null }) {
     const n = String(name || '').trim();
     if (!n) throw new StoreError('タグ名を入力してください。');
-    const tid = typeId || this.data.tagTypes[0].id;
+    const parent = parentId ? this._tag(parentId) : null;
+    const tid = typeId || (parent ? parent.typeId : this.data.tagTypes[0].id);
     this._type(tid);
-    const existing = this.findTag(n, tid);
+    const pid = this._checkParent(parentId, tid);
+    const existing = this.findTag(n, tid, pid);
     if (existing) return existing;
-    const t = { id: newId('t'), name: n, typeId: tid };
+    const t = { id: newId('t'), name: n, typeId: tid, parentId: pid };
     this.data.tags.push(t);
     this.save();
     return clone(t);
   }
 
-  updateTag(id, { name, typeId } = {}) {
+  /**
+   * Rename / change type / change parent. A type change moves the whole
+   * subtree to the new type (the tag becomes a root there unless a parent of
+   * the new type is given). Parents must share the type; cycles are refused.
+   */
+  updateTag(id, { name, typeId, parentId } = {}) {
     const t = this._tag(id);
     const nextName = name !== undefined ? String(name).trim() : t.name;
     const nextType = typeId !== undefined ? typeId : t.typeId;
     if (!nextName) throw new StoreError('タグ名を入力してください。');
     this._type(nextType);
-    const dup = this.data.tags.find((x) => x.id !== id && x.typeId === nextType && x.name.toLowerCase() === nextName.toLowerCase());
-    if (dup) throw new StoreError(`同じ種類に「${dup.name}」が既にあります。統合を使用してください。`);
+    let nextParent;
+    if (parentId !== undefined) nextParent = parentId || null;
+    else nextParent = nextType !== t.typeId ? null : (t.parentId || null);
+    nextParent = this._checkParent(nextParent, nextType, id);
+    const dup = this.data.tags.find((x) => x.id !== id && x.typeId === nextType && (x.parentId || null) === nextParent && x.name.toLowerCase() === nextName.toLowerCase());
+    if (dup) throw new StoreError(`同じ階層に「${dup.name}」が既にあります。統合を使用してください。`);
+    if (nextType !== t.typeId) {
+      for (const d of this._descendants(id)) this._tag(d).typeId = nextType;
+    }
     t.name = nextName;
     t.typeId = nextType;
+    t.parentId = nextParent;
     this.save();
     return clone(t);
   }
 
-  /** Replaces `sourceId` by `targetId` on every image, then deletes the source tag. */
+  /**
+   * Replaces `sourceId` by `targetId` on every image, moves the source's
+   * children under the target, then deletes the source tag.
+   */
   mergeTags(sourceId, targetId) {
     if (sourceId === targetId) throw new StoreError('同じタグには統合できません。');
-    this._tag(sourceId);
-    this._tag(targetId);
+    const src = this._tag(sourceId);
+    const tgt = this._tag(targetId);
     for (const entry of Object.values(this.data.images)) {
       const i = entry.tags.indexOf(sourceId);
       if (i === -1) continue;
       entry.tags.splice(i, 1);
       if (!entry.tags.includes(targetId)) entry.tags.push(targetId);
     }
+    // a target that lived directly below the source takes the source's place
+    if (tgt.parentId === sourceId) tgt.parentId = src.parentId || null;
+    for (const c of this.data.tags) {
+      if (c.parentId !== sourceId || c.id === targetId) continue;
+      c.parentId = targetId;
+      if (c.typeId !== tgt.typeId) {
+        c.typeId = tgt.typeId;
+        for (const d of this._descendants(c.id)) this._tag(d).typeId = tgt.typeId;
+      }
+    }
     this.data.tags = this.data.tags.filter((t) => t.id !== sourceId);
     this.save();
   }
 
-  /** Deletes the tag metadata only (never touches files). */
+  /** Number of direct children (shown in the delete confirmation). */
+  childCount(id) {
+    return this.data.tags.filter((t) => t.parentId === id).length;
+  }
+
+  /** Deletes the tag metadata only (never touches files); its children move to its parent. */
   deleteTag(id) {
-    this._tag(id);
-    this.data.tags = this.data.tags.filter((t) => t.id !== id);
+    const t = this._tag(id);
+    for (const c of this.data.tags) if (c.parentId === id) c.parentId = t.parentId || null;
+    this.data.tags = this.data.tags.filter((x) => x.id !== id);
     for (const [k, entry] of Object.entries(this.data.images)) {
       entry.tags = entry.tags.filter((x) => x !== id);
       if (!entry.tags.length) this._deleteKey(k);
@@ -354,11 +438,32 @@ class Store {
     this.save();
   }
 
+  /** Images carrying each tag directly. */
   tagUsage() {
     const usage = {};
     for (const t of this.data.tags) usage[t.id] = 0;
     for (const entry of Object.values(this.data.images)) {
       for (const id of entry.tags) usage[id] = (usage[id] || 0) + 1;
+    }
+    return usage;
+  }
+
+  /** Images carrying each tag or any of its descendants (each image counted once per tag). */
+  tagUsageDeep() {
+    const byId = new Map(this.data.tags.map((t) => [t.id, t]));
+    const usage = {};
+    for (const t of this.data.tags) usage[t.id] = 0;
+    for (const entry of Object.values(this.data.images)) {
+      const hit = new Set();
+      for (const id of entry.tags) {
+        let cur = byId.get(id);
+        let guard = 0;
+        while (cur && !hit.has(cur.id) && guard++ < 1000) {
+          hit.add(cur.id);
+          cur = cur.parentId ? byId.get(cur.parentId) : null;
+        }
+      }
+      for (const id of hit) usage[id] = (usage[id] || 0) + 1;
     }
     return usage;
   }
@@ -409,6 +514,41 @@ class Store {
     }
     this.save();
     return this.getTagsFor(paths);
+  }
+
+  /**
+   * カテゴリ一括編集: add `addIds` to and remove `removeIds` from every path in
+   * one step (one debounced save). Returns the previous tag lists
+   * ({path: tagIds}) so the change can be undone with restoreTags().
+   */
+  bulkApply(paths, addIds = [], removeIds = []) {
+    const before = this.getTagsFor(paths);
+    const rm = new Set(removeIds);
+    const add = addIds.filter((id) => !rm.has(id));
+    if (add.length) this.addTagsToImages(paths, add);
+    if (rm.size) this.removeTagsFromImages(paths, [...rm]);
+    return before;
+  }
+
+  /** Undo for bulkApply: set each path's tags back exactly (tag ids that no longer exist are dropped). */
+  restoreTags(snapshot) {
+    const known = new Set(this.data.tags.map((t) => t.id));
+    for (const [p, ids] of Object.entries(snapshot || {})) {
+      const tags = [...new Set((ids || []).filter((id) => known.has(id)))];
+      const k = this._keyFor(p);
+      if (!tags.length) {
+        if (k) this._deleteKey(k);
+        continue;
+      }
+      if (k) this.data.images[k].tags = tags;
+      else {
+        const nk = path.resolve(p);
+        this.data.images[nk] = { tags };
+        this._index.set(this.norm(nk), nk);
+      }
+    }
+    this.save();
+    return this.getTagsFor(Object.keys(snapshot || {}));
   }
 
   /** All tagged image entries: [{path, tags}] */
