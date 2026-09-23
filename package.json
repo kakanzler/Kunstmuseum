@@ -8,13 +8,53 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/*.test.js\"",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "dist": "electron-builder --win nsis",
+    "icon": "node scripts/make-icon.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "cytoscape": "^3.34.3"
   },
   "devDependencies": {
-    "electron": "^44.4.4"
+    "electron": "^44.4.4",
+    "electron-builder": "^26.15.3"
+  },
+  "author": "Kazumasa-Kan",
+  "build": {
+    "appId": "com.kunstmuseum.app",
+    "productName": "Kunstmuseum",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Kunstmuseum",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Kunstmuseum-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    }
   }
 }

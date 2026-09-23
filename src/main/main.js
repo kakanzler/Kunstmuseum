@@ -443,6 +443,12 @@ function saveBounds() {
   store.setSettings({ window: { ...b, maximized: mainWindow.isMaximized() } });
 }
 
+/** build/icon.ico when running from the repo; packaged builds use the exe's embedded icon. */
+function windowIcon() {
+  const p = path.join(__dirname, '..', '..', 'build', 'icon.ico');
+  return fs.existsSync(p) ? { icon: p } : {};
+}
+
 function createWindow() {
   const { bounds, maximized } = restoreBounds();
   mainWindow = new BrowserWindow({
@@ -453,6 +459,7 @@ function createWindow() {
     backgroundColor: '#0e0e0f',
     title: 'Kunstmuseum',
     autoHideMenuBar: true,
+    ...windowIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

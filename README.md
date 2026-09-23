@@ -14,7 +14,26 @@ npm start        # アプリを起動
 | コマンド | 内容 |
 |---|---|
 | `npm test` | 単体テスト（store / fsops / レイアウトモデル / スライドショーの再生順）。`node --test test/` でも実行できます |
+| `npm run dist` | Windows インストーラのみビルド（`dist\`）。通常は `release.ps1` を使用 |
+| `npm run icon` | アプリアイコン `build/icon.ico` を再生成 |
 | `npm run smoke` | スモークテスト。一時フォルダにテスト画像を作り、別の userData でアプリを 2 回起動（2 回目はレイアウト復元の確認）・自動操作して終了コード 0/1 を返します（実際のデータには触れません）。`KM_SMOKE_BULK=5000` で大量画像のテスト |
+
+## インストール
+
+```powershell
+pwsh ./release.ps1 -Install
+```
+
+- 単体テストとスモークテストを実行してから Windows インストーラ（NSIS）をビルドし、サイレントインストールします
+  （インストーラだけ作るときは `pwsh ./release.ps1`、成果物は `distKunstmuseum-Setup-<version>.exe`）
+- インストール先: `D:Program Filesmy_original_appkunstmuseum`（`-InstallDir` で変更可）
+- ショートカット: デスクトップとスタートメニューに「Kunstmuseum」が作成されます
+- アプリが起動中の場合はインストールを中断します。アプリを閉じてから実行してください
+- データ（タグ・登録フォルダ・レイアウト・設定）は `%APPDATA%Kunstmuseumlibrary.json` にあり、
+  `npm start` の開発版と共通です。インストール・更新・アンインストールのいずれでも削除されません。画像ファイルにも一切書き込みません
+- アンインストール: Windows の［設定］＞［アプリ］＞［インストールされているアプリ］で「Kunstmuseum」を選んで［アンインストール］
+- 未署名のため、Windows Defender が `Kunstmuseum.exe` を誤検知して隔離することがあります。その場合は管理者権限の PowerShell で
+  `Add-MpPreference -ExclusionPath "D:Program Filesmy_original_appkunstmuseum"` を実行してから再インストールしてください
 
 ## 機能
 

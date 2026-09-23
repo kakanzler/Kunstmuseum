@@ -206,7 +206,9 @@ console.log(`[smoke] fixtures: ${created.length} files in ${work}`);
 
 function launch(phase) {
   return new Promise((resolve) => {
-    const child = spawn(electronPath, ['.'], {
+    // KM_SMOKE_EXE=<installed Kunstmuseum.exe> runs the same checks against a packaged build
+    const exe = process.env.KM_SMOKE_EXE || electronPath;
+    const child = spawn(exe, process.env.KM_SMOKE_EXE ? [] : ['.'], {
       cwd: path.join(__dirname, '..'),
       env: { ...env, KM_SMOKE_PHASE: String(phase) },
       stdio: 'inherit',
