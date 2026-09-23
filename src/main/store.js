@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   graph: { scope: 'folder', mode: 'bipartite', hiddenTypes: [] },
   layout: null,      // editor-group layout (renderer layout-model serialize())
   showFiles: true,   // sidebar tree lists image files
+  screen: { target: 'folder', folder: null, includeSub: true, tagId: null, interval: 5, order: 'name', loop: true },
 });
 
 const SEED_TAG_TYPES = [

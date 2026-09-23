@@ -5,6 +5,9 @@ import { api, state, setLib, samePath, on, pathUnder } from './state.js';
 import { LayoutModel } from './layout-model.js';
 import { addTagsToPaths, openTagManager } from './tags.js';
 import { renameFolderTo } from './ops.js';
+import { inspectorPreviewImg } from './inspector.js';
+import { activeShow } from './screen.js';
+import { fileUrl } from './ui.js';
 
 const TAB_TYPE = 'application/x-km-tab';
 
@@ -21,6 +24,17 @@ function waitFor(cond, ms, what) {
     tick();
   });
 }
+
+async function waitForAsync(fn, ms, what) {
+  const t0 = performance.now();
+  for (;;) {
+    if (await fn()) return true;
+    if (performance.now() - t0 > ms) throw new Error(`timeout: ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function assert(cond, msg) {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -86,7 +100,60 @@ async function phase1({ wb, sidebar, step, report }) {
   assert(ptab.classList.contains('italic'), 'preview tab italic');
   step(`Preview follows selection (${first.name})`);
 
+  // 2b. no flash on selection: nothing is rebuilt or blanked while the selection changes
+  {
+    const fsBefore = fsEvents.length;
+    const inspImg0 = inspectorPreviewImg();
+    const st = { grid: 0, tabbar: 0, srcEmpty: 0, swapNotReady: 0, blankFrames: 0, hiddenFrames: 0, inspBlankFrames: 0, inspReplaced: 0, frames: 0 };
+    const mo = new MutationObserver((recs) => {
+      for (const r of recs) {
+        const t = r.target;
+        if (r.type === 'childList' && g.grid.contains(t)) st.grid++;
+        else if (r.type === 'childList' && t.closest && t.closest('.tabbar')) st.tabbar++;
+        else if (r.type === 'attributes' && t === preview.viewer.img) {
+          if (!t.getAttribute('src')) st.srcEmpty++;
+          else if (!t.complete || !t.naturalWidth) st.swapNotReady++;
+        }
+      }
+    });
+    mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
+    let sampling = true;
+    const sample = () => {
+      if (!sampling) return;
+      st.frames++;
+      const im = preview.viewer.img;
+      if (getComputedStyle(im).visibility === 'hidden') st.hiddenFrames++;
+      else if (!im.getAttribute('src') || !im.complete || !im.naturalWidth) st.blankFrames++;
+      const ii = inspectorPreviewImg();
+      if (ii !== inspImg0) st.inspReplaced++;
+      else if (!ii.getAttribute('src') || !ii.complete || !ii.naturalWidth) st.inspBlankFrames++;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+    for (let k = 1; k <= 4; k++) {
+      g.selectIndex(k % g.view.length);
+      await new Promise((res) => setTimeout(res, 350));
+    }
+    // rapid changes: stale loads must be ignored, the last pick wins
+    g.selectIndex(1); g.selectIndex(2); g.selectIndex(3);
+    const last = g.view[3];
+    await waitFor(() => preview.viewer.item && preview.viewer.item.path === last.path && preview.viewer.img.getAttribute('src') === fileUrl(last), 5000, 'last rapid pick shown');
+    await new Promise((res) => setTimeout(res, 900)); // a watcher event would arrive within ~500 ms
+    sampling = false;
+    mo.disconnect();
+    st.fsEvents = fsEvents.length - fsBefore;
+    report.flash = st;
+    assert(st.grid === 0, `grid tiles recreated on selection (${st.grid})`);
+    assert(st.tabbar === 0, `tab bar rebuilt on selection (${st.tabbar})`);
+    assert(st.srcEmpty === 0 && st.swapNotReady === 0, `Preview img swapped to empty/undecoded (${st.srcEmpty}/${st.swapNotReady})`);
+    assert(st.blankFrames === 0 && st.hiddenFrames === 0, `Preview painted blank frames (${st.blankFrames}/${st.hiddenFrames})`);
+    assert(st.inspReplaced === 0 && st.inspBlankFrames === 0, `inspector preview replaced/blank (${st.inspReplaced}/${st.inspBlankFrames})`);
+    assert(st.fsEvents === 0, `selection caused ${st.fsEvents} watcher refreshes (access-time events)`);
+    step(`no flash on selection (${st.frames} frames observed)`);
+  }
+
   // 3. tags + filter
+  g.selectIndex(0);
   g.selectIndex(1, { range: true });
   const paths = g.selectedPaths();
   const r = await api.addTag({ name: 'スモーク', typeId: state.lib.tagTypes[0].id });
@@ -235,6 +302,51 @@ async function phase1({ wb, sidebar, step, report }) {
   await tm;
   step('tag manager ok');
 
+  // 15. スクリーン表示モード
+  await screenModeChecks({ wb, root, tagId, step, report });
+
+  // 16. Alt+P: Preview in the group right of the gallery, focus stays on the gallery
+  {
+    const altP = () => key({ key: 'p', code: 'KeyP', altKey: true });
+    const galGroup = () => wb.model.groupOf(galleryTabId);
+    const prevTab = () => wb.model.findSingleton('preview');
+    const checkRight = async (label) => {
+      const pt = prevTab();
+      assert(pt, `${label}: Preview exists`);
+      const pgI = wb.model.groupIndex(wb.model.groupOf(pt.id).id);
+      assert(pgI === wb.model.groupIndex(galGroup().id) + 1, `${label}: Preview is right of the gallery group (${JSON.stringify(kinds(wb))})`);
+      assert(wb.model.groupOf(pt.id).activeTabId === pt.id, `${label}: Preview is the active tab of its group`);
+      assert(wb.model.activeGroupId === galGroup().id, `${label}: active group stays on the gallery`);
+      assert(document.activeElement === g.grid, `${label}: keyboard focus stays in the gallery`);
+      const pv = wb.pane(pt.id);
+      const sel = g.view[0];
+      await waitFor(() => pv.viewer.item && pv.viewer.item.path === sel.path && pv.viewer.img.naturalWidth > 0, 5000, `${label}: Preview shows the selection`);
+    };
+    const focusGallery = () => {
+      wb.activate(galleryTabId);
+      g.grid.focus({ preventScroll: true });
+      g.selectIndex(0);
+    };
+
+    wb.closeTab(prevTab().id);
+    assert(!prevTab(), 'Preview closed');
+    focusGallery();
+    altP();
+    await checkRight('Alt+P (no Preview)');
+    const snap = JSON.stringify(wb.model.serialize((t) => t.state));
+    altP();
+    assert(JSON.stringify(wb.model.serialize((t) => t.state)) === snap, 'second Alt+P changes nothing');
+    await checkRight('Alt+P again');
+    // drag Preview to the far left, then Alt+P brings it back to the right of the gallery
+    wb.model.dropTab(prevTab().id, wb.model.groups[0].id, 'left');
+    wb.commit();
+    assert(wb.model.groupIndex(wb.model.groupOf(prevTab().id).id) < wb.model.groupIndex(galGroup().id), 'Preview moved left');
+    focusGallery();
+    altP();
+    await checkRight('Alt+P after moving Preview left');
+    step(`Alt+P shows Preview right of the gallery, focus kept (${JSON.stringify(kinds(wb))})`);
+  }
+
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
   const back = LayoutModel.restore(ser, { caseInsensitive: state.info.platform === 'win32' }).serialize((t) => t.state);
@@ -260,3 +372,108 @@ async function phase2({ wb, savedLayout, step, report }) {
   step(`second launch restored the layout ${JSON.stringify(report.restored)}`);
 }
 
+
+async function screenModeChecks({ root, tagId, step, report }) {
+  const dlg = () => document.querySelector('.modal .screen-dialog');
+  const openDlg = async () => {
+    key({ key: 'O', code: 'KeyO', ctrlKey: true, altKey: true, shiftKey: true });
+    return waitFor(dlg, 3000, 'screen dialog');
+  };
+  const startBtn = () => [...document.querySelectorAll('.modal .modal-foot .btn.primary')].find((b) => b.textContent === 'スクリーン 開始');
+  const esc = () => key({ key: 'Escape', code: 'Escape' });
+  const fullScreen = () => api.isFullScreen();
+
+  // shortcut opens, Esc closes, reopens
+  await openDlg();
+  esc();
+  await waitFor(() => !dlg(), 3000, 'dialog closed by Esc');
+  let box = await openDlg();
+  step('Ctrl+Alt+Shift+O opens スクリーン表示, Esc closes, reopens');
+
+  // folder mode, 1 s interval
+  box.querySelector('input[value="folder"]').click();
+  const folderSel = box.querySelector('.screen-folder');
+  await waitFor(() => [...folderSel.options].some((o) => samePath(o.value, root)), 5000, 'folder options');
+  folderSel.value = [...folderSel.options].find((o) => samePath(o.value, root)).value;
+  box.querySelector('.screen-include').checked = true;
+  box.querySelector('.screen-interval').value = '1';
+  box.querySelector('.screen-order').value = 'name';
+  box.querySelector('.screen-loop').checked = true;
+  const wasFs = await fullScreen();
+  startBtn().click();
+  const show = await waitFor(() => activeShow(), 8000, 'screen mode started');
+  await waitForAsync(fullScreen, 5000, 'fullscreen on');
+  assert(!dlg(), 'dialog closed after start');
+  // crossfade must never show an undecoded/blank layer
+  let blank = 0;
+  let frames = 0;
+  let sampling = true;
+  const sample = () => {
+    if (!sampling) return;
+    frames++;
+    for (const l of show.layers) {
+      if (l.root.classList.contains('visible') && (!l.img.getAttribute('src') || !l.img.complete || !l.img.naturalWidth)) blank++;
+    }
+    requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+  await waitFor(() => show.shownCount >= 3, 8000, 'two automatic slide advances');
+  sampling = false;
+  assert(blank === 0, `slides painted ${blank} blank frames`);
+  step(`folder mode: ${show.playlist.length} images, advanced ${show.shownCount - 1} slides at 1 s, 0 blank of ${frames} frames`);
+
+  // Space pauses, →/← navigate, Space resumes
+  key({ key: ' ', code: 'Space' });
+  assert(show.paused, 'Space paused');
+  const n = show.playlist.length;
+  const i0 = show.playlist.index;
+  key({ key: 'ArrowRight', code: 'ArrowRight' });
+  await waitFor(() => show.playlist.index === (i0 + 1) % n && show.lastShown === show.playlist.current, 3000, '→ next');
+  key({ key: 'ArrowLeft', code: 'ArrowLeft' });
+  await waitFor(() => show.playlist.index === i0 && show.lastShown === show.playlist.current, 3000, '← prev');
+  const c0 = show.shownCount;
+  await sleep(1600);
+  assert(show.shownCount === c0, 'no advance while paused');
+  key({ key: ' ', code: 'Space' });
+  assert(!show.paused, 'Space resumed');
+  await waitFor(() => show.shownCount > c0, 4000, 'advances after resume');
+  step('Space pause/resume, → and ← work');
+
+  // Esc exits, restores fullscreen state, selects the last shown image
+  const last = show.lastShown;
+  esc();
+  await waitFor(() => !activeShow() && !document.querySelector('.screen-overlay'), 3000, 'screen mode exited');
+  await waitForAsync(async () => (await fullScreen()) === wasFs, 5000, 'fullscreen state restored');
+  assert(state.selection.primary === last.path, 'last shown image selected');
+  step(`Esc exited; fullscreen restored to ${wasFs}; last image selected (${last.name})`);
+
+  // category mode starts with the tagged set
+  box = await openDlg();
+  box.querySelector('input[value="category"]').click();
+  box.querySelector('.screen-tag').value = tagId;
+  startBtn().click();
+  const show2 = await waitFor(() => activeShow(), 8000, 'category screen mode');
+  const tagged = (await api.listTagged()).filter((it) => it.tags.includes(tagId)).map((it) => it.path).sort();
+  const inShow = show2.playlist.base.map((it) => it.path).sort();
+  assert(sameJson(inShow, tagged) && tagged.length > 0, `category set ${JSON.stringify(inShow)} vs ${JSON.stringify(tagged)}`);
+  await waitFor(() => show2.shownCount >= 1, 5000, 'category first slide');
+  esc();
+  await waitFor(() => !activeShow(), 3000, 'category exit');
+  await waitForAsync(async () => (await fullScreen()) === wasFs, 5000, 'fullscreen restored after category');
+  step(`category mode started with the ${tagged.length} tagged images`);
+
+  // empty set: toast, no start, dialog stays open
+  const empty = await api.addTag({ name: 'スモーク空', typeId: state.lib.tagTypes[0].id });
+  setLib(empty.lib);
+  box = await openDlg();
+  box.querySelector('input[value="category"]').click();
+  box.querySelector('.screen-tag').value = empty.tag.id;
+  startBtn().click();
+  await waitFor(() => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('表示できる画像がありません')), 5000, 'empty-set toast');
+  await sleep(300);
+  assert(!activeShow() && dlg(), 'empty set did not start and the dialog stayed open');
+  esc();
+  await waitFor(() => !dlg(), 3000, 'dialog closed');
+  report.screen = { folderImages: show.playlist.length, categoryImages: tagged.length };
+  step('empty set: toast shown, not started');
+}

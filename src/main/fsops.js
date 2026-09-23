@@ -336,6 +336,22 @@ async function moveFiles(srcs, destDir) {
   return result;
 }
 
+/**
+ * Should a recursive fs.watch event be ignored for refresh purposes?
+ * - 'change' on a directory only reports the folder's own timestamps or
+ *   attributes; adding/removing/renaming entries is always reported
+ *   separately as 'rename' events for those entries.
+ * - Windows also reports last-access-time updates as 'change' (reading a
+ *   file triggers one). Those leave mtime and ctime untouched, so a file
+ *   'change' with both older than `windowMs` is access-only.
+ * 'rename' (create/delete/rename) and vanished entries always count.
+ */
+function isIgnorableChange(eventType, stat, now = Date.now(), windowMs = 5000) {
+  if (eventType !== 'change' || !stat) return false;
+  if (typeof stat.isDirectory === 'function' && stat.isDirectory()) return true;
+  return now - stat.mtimeMs > windowMs && now - stat.ctimeMs > windowMs;
+}
+
 function describeError(e) {
   if (!e) return '不明なエラー';
   if (e instanceof FsOpError) return e.message;
@@ -370,4 +386,5 @@ module.exports = {
   renamePath,
   moveFiles,
   describeError,
+  isIgnorableChange,
 };

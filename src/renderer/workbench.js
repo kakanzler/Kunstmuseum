@@ -173,7 +173,7 @@ class Workbench {
       showContextMenu(r.left, r.bottom + 2, [
         { label: 'ギャラリー', action: () => this.addFromMenu(ge.id, 'gallery') },
         { label: '知識グラフ', action: () => this.addFromMenu(ge.id, 'graph') },
-        { label: 'Preview', action: () => this.addFromMenu(ge.id, 'preview') },
+        { label: 'Preview', title: 'Alt+P: アクティブなグループの右に Preview を表示', action: () => this.addFromMenu(ge.id, 'preview') },
       ]);
       e.stopPropagation();
     });
@@ -325,10 +325,17 @@ class Workbench {
     emit('active-pane-changed');
     const t = this.root.querySelector(`.etab[data-tab="${pane.tabId}"]`);
     if (!t) return;
-    t.querySelector('.etab-title').textContent = pane.title();
-    t.classList.toggle('italic', !!pane.italic);
+    // update the existing text node in place (no tab-bar rebuild, no reflow of siblings' nodes)
+    const span = t.querySelector('.etab-title');
+    const text = pane.title();
+    if (span.textContent !== text) {
+      if (span.firstChild && span.firstChild.nodeType === Node.TEXT_NODE && span.childNodes.length === 1) span.firstChild.nodeValue = text;
+      else span.textContent = text;
+    }
+    if (t.classList.contains('italic') !== !!pane.italic) t.classList.toggle('italic', !!pane.italic);
     const tab = this.model.tab(pane.tabId);
-    if (tab) t.title = this.tabTooltip(tab, pane);
+    const tip = tab ? this.tabTooltip(tab, pane) : '';
+    if (tab && t.title !== tip) t.title = tip;
   }
 
   stateChanged() {
@@ -518,6 +525,18 @@ class Workbench {
     if (scope !== 'folder' || !p.source || p.source.kind !== 'folder') await p.setSource({ kind: 'tagged' });
     p.setTagFilter([tagId]);
     return p;
+  }
+
+  /**
+   * Alt+P: show Preview in the group right of the active group while the
+   * active group and the keyboard focus stay where they are.
+   */
+  showPreviewRight() {
+    const focused = document.activeElement;
+    const tab = this.model.showPreviewRight(this.model.activeGroupId);
+    this.commit();
+    if (focused && focused !== document.body && focused.isConnected) focused.focus({ preventScroll: true });
+    return tab;
   }
 
   // ---------- keyboard ----------

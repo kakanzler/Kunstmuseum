@@ -496,36 +496,57 @@ export class GalleryPane {
     this.emptyEl.textContent = msg || '';
   }
 
+  _makeTile(it) {
+    const img = document.createElement('img');
+    img.alt = '';
+    img.draggable = false;
+    img.decoding = 'async';
+    img.dataset.src = thumbUrl(it);
+    img.addEventListener('error', () => img.classList.add('broken'), { once: true });
+    const thumb = document.createElement('div');
+    thumb.className = 'thumb';
+    thumb.append(img);
+    const cap = document.createElement('div');
+    cap.className = 'cap';
+    cap.textContent = it.name;
+    cap.title = it.name;
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    tile.draggable = true;
+    tile.append(thumb, cap);
+    tile._key = `${it.path}|${it.mtime}|${it.name}`;
+    this.observer.observe(img);
+    return tile;
+  }
+
+  /**
+   * Keyed render: an unchanged view touches no DOM at all; otherwise tiles
+   * whose file is unchanged are reused (their loaded thumbnails stay on
+   * screen) and only new/changed files get new tiles.
+   */
   _renderGrid() {
-    this.observer.disconnect();
-    this.tileByPath = new Map();
-    const frag = document.createDocumentFragment();
-    this.view.forEach((it, i) => {
-      const img = document.createElement('img');
-      img.alt = '';
-      img.draggable = false;
-      img.decoding = 'async';
-      img.dataset.src = thumbUrl(it);
-      img.addEventListener('error', () => img.classList.add('broken'), { once: true });
-      const thumb = document.createElement('div');
-      thumb.className = 'thumb';
-      thumb.append(img);
-      const cap = document.createElement('div');
-      cap.className = 'cap';
-      cap.textContent = it.name;
-      cap.title = it.name;
-      const tile = document.createElement('div');
-      tile.className = 'tile';
-      if (this.selection.has(it.path)) tile.classList.add('selected');
-      if (this.focus === it.path) tile.classList.add('focused');
-      tile.dataset.i = String(i);
-      tile.draggable = true;
-      tile.append(thumb, cap);
-      frag.append(tile);
-      this.tileByPath.set(it.path, tile);
-      this.observer.observe(img);
-    });
-    this.grid.replaceChildren(frag);
+    const keys = this.view.map((it) => `${it.path}|${it.mtime}|${it.name}`);
+    const sameView = this._keys && this._keys.length === keys.length && this._keys.every((k, i) => k === keys[i]);
+    if (!sameView) {
+      const old = this.tileByPath;
+      this.tileByPath = new Map();
+      const frag = document.createDocumentFragment();
+      this.view.forEach((it, i) => {
+        let tile = old.get(it.path);
+        if (tile && tile._key === keys[i]) old.delete(it.path);
+        else tile = this._makeTile(it);
+        tile.dataset.i = String(i);
+        frag.append(tile);
+        this.tileByPath.set(it.path, tile);
+      });
+      for (const t of old.values()) {
+        const img = t.querySelector('img');
+        if (img) this.observer.unobserve(img);
+      }
+      this.grid.replaceChildren(frag);
+      this._keys = keys;
+    }
+    this._paintSelection();
     if (!this.source) this._setEmpty('サイドバーでフォルダを選択してください。\nフォルダは「フォルダを追加」またはエクスプローラーからのドロップで登録できます。');
     else if (!this.items.length) this._setEmpty(this.source.kind === 'tagged' ? 'タグ付けされた画像がありません。' : 'このフォルダには対応する画像がありません。');
     else if (!this.view.length) this._setEmpty('条件に一致する画像がありません。');
@@ -538,10 +559,13 @@ export class GalleryPane {
     return tile ? Number(tile.dataset.i) : -1;
   }
 
+  /** Selection only toggles classes on tiles whose state actually changes. */
   _paintSelection() {
     for (const [p, tile] of this.tileByPath) {
-      tile.classList.toggle('selected', this.selection.has(p));
-      tile.classList.toggle('focused', this.focus === p);
+      const sel = this.selection.has(p);
+      const foc = this.focus === p;
+      if (tile.classList.contains('selected') !== sel) tile.classList.toggle('selected', sel);
+      if (tile.classList.contains('focused') !== foc) tile.classList.toggle('focused', foc);
     }
     this._renderCount();
   }

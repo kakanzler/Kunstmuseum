@@ -59,5 +59,9 @@ contextBridge.exposeInMainWorld('api', {
   getPathForFile: (file) => {
     try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
   },
+  screenEnter: call('screen:enter'),
+  screenExit: call('screen:exit'),
+  isFullScreen: call('win:isFullScreen'),
+
   smokeReport: (report) => ipcRenderer.send('smoke:report', report),
 });

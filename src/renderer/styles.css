@@ -17,10 +17,12 @@
   --inspector-w: 300px;
   --thumb: 160px;
   --font: "Segoe UI", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  color-scheme: dark; /* native controls/scrollbars never paint white */
 }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+html { background: var(--bg); }
 body {
   background: var(--bg);
   color: var(--text);
@@ -357,6 +359,32 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
 .tm-add { display: flex; gap: 6px; margin-top: 10px; }
 .tm-add .input { flex: 1; min-width: 0; }
 .tm-filter { width: 100%; margin-bottom: 8px; }
+
+/* ---------- スクリーン表示 ---------- */
+.screen-dialog { min-width: 460px; display: flex; flex-direction: column; gap: 12px; }
+.screen-row { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: start; }
+.screen-label { color: var(--text-2); padding-top: 4px; }
+.screen-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.screen-field.inline { flex-direction: row; align-items: center; gap: 10px; }
+.screen-sub { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; }
+.screen-sub.disabled { opacity: .45; }
+.screen-interval { width: 90px; }
+.screen-overlay {
+  position: fixed; inset: 0; z-index: 1000; background: #000; outline: none; overflow: hidden;
+  user-select: none;
+}
+.screen-overlay.idle { cursor: none; }
+.screen-layer { position: absolute; inset: 0; opacity: 0; transition: opacity 400ms ease; background: #000; }
+.screen-layer.visible { opacity: 1; }
+.screen-layer img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.screen-layer img:not([src]) { visibility: hidden; }
+.screen-hud {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+  padding: 6px 16px; border-radius: 16px; background: rgba(0, 0, 0, .6); color: #ddd; font-size: 13px;
+  opacity: 0; transition: opacity 200ms ease; pointer-events: none; white-space: nowrap; max-width: 90vw;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.screen-hud.shown, .screen-hud.sticky { opacity: 1; }
 
 /* ---------- toasts ---------- */
 .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 400; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }

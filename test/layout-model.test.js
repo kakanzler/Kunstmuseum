@@ -220,3 +220,120 @@ test('remapPaths and cycleTab', () => {
   assert.equal(m.cycleTab(1).id, a.id);
   assert.equal(m.cycleTab(-1).id, b.id);
 });
+
+// ---------- Alt+P: showPreviewRight ----------
+const where = (m, kind = 'preview') => m.groupIndex(m.groupOf(m.findSingleton(kind).id).id);
+
+test('showPreviewRight case 1: no Preview → new group right of the rightmost active group', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  const t = m.showPreviewRight(a.id);
+  assert.equal(t.kind, 'preview');
+  assert.deepEqual(kinds(m), [['gallery'], ['preview']]);
+  assert.equal(m.groups[1].activeTabId, t.id, 'Preview is the active tab of its group');
+  assert.equal(m.activeGroupId, a.id, 'focus stays on A');
+  assert.equal(m.activeTab().id, gal.id);
+  assert.ok(sizesOk(m));
+});
+
+test('showPreviewRight case 1: no Preview → the existing group immediately right of A', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  m.addTab(a.id, { kind: 'gallery' });
+  const b = m.addGroup(a.id, 'right');
+  const img = m.addTab(b.id, { kind: 'image', path: 'x.png' });
+  m.addGroup(b.id, 'right');
+  m.addTab(m.groups[2].id, { kind: 'graph' });
+  m.activateGroup(a.id);
+  m.showPreviewRight(a.id);
+  assert.deepEqual(kinds(m), [['gallery'], ['image:x.png', 'preview'], ['graph']]);
+  assert.equal(m.group(b.id).activeTabId, m.findSingleton('preview').id);
+  assert.notEqual(m.group(b.id).activeTabId, img.id);
+  assert.equal(m.activeGroupId, a.id);
+});
+
+test('showPreviewRight case 1 at 4 groups with A rightmost → rightmost group other than A', () => {
+  const m = new LayoutModel();
+  const g = [m.addGroup()];
+  for (let i = 0; i < 3; i++) g.push(m.addGroup(g[i].id, 'right'));
+  g.forEach((x) => m.addTab(x.id, { kind: 'gallery' }));
+  m.activateGroup(g[3].id);
+  m.showPreviewRight(g[3].id);
+  assert.equal(m.groups.length, 4);
+  assert.equal(where(m), 2);
+  assert.equal(m.activeGroupId, g[3].id);
+});
+
+test('showPreviewRight case 2: Preview already to the right → only activated, nothing moves', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  m.addTab(a.id, { kind: 'gallery' });
+  const b = m.addGroup(a.id, 'right');
+  const c = m.addGroup(b.id, 'right');
+  m.addTab(b.id, { kind: 'graph' });
+  const p = m.addTab(c.id, { kind: 'preview' });
+  const img = m.addTab(c.id, { kind: 'image', path: 'y.png' });
+  m.activateGroup(a.id);
+  const before = kinds(m);
+  m.showPreviewRight(a.id);
+  assert.deepEqual(kinds(m), before, 'not moved (even though it is not adjacent)');
+  assert.equal(m.group(c.id).activeTabId, p.id);
+  assert.ok(img);
+  assert.equal(m.activeGroupId, a.id);
+  const again = JSON.stringify(m.serialize());
+  m.showPreviewRight(a.id);
+  assert.equal(JSON.stringify(m.serialize()), again, 'idempotent');
+});
+
+test('showPreviewRight case 3: Preview left of A moves right of A; the emptied group is removed', () => {
+  const m = new LayoutModel();
+  const left = m.addGroup();
+  m.addTab(left.id, { kind: 'preview' });
+  const a = m.addGroup(left.id, 'right');
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  m.activateTab(gal.id);
+  m.showPreviewRight(a.id);
+  assert.deepEqual(kinds(m), [['gallery'], ['preview']]);
+  assert.equal(m.activeGroupId, a.id);
+  assert.equal(m.activeTab().id, gal.id);
+  assert.ok(sizesOk(m));
+});
+
+test('showPreviewRight case 3: Preview inside A moves out to the right group', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  const p = m.addTab(a.id, { kind: 'preview' });
+  const b = m.addGroup(a.id, 'right');
+  m.addTab(b.id, { kind: 'graph' });
+  m.activateTab(p.id);
+  m.showPreviewRight(a.id);
+  assert.deepEqual(kinds(m), [['gallery'], ['graph', 'preview']]);
+  assert.equal(m.group(a.id).activeTabId, gal.id, 'A shows its remaining tab');
+  assert.equal(m.group(b.id).activeTabId, p.id);
+  assert.equal(m.activeGroupId, a.id);
+});
+
+test('showPreviewRight case 3 at 4 groups: from the left into the rightmost group other than A', () => {
+  const m = new LayoutModel();
+  const g = [m.addGroup()];
+  for (let i = 0; i < 3; i++) g.push(m.addGroup(g[i].id, 'right'));
+  m.addTab(g[0].id, { kind: 'preview' });
+  m.addTab(g[0].id, { kind: 'graph' });
+  g.slice(1).forEach((x) => m.addTab(x.id, { kind: 'gallery' }));
+  m.activateGroup(g[3].id);
+  m.showPreviewRight(g[3].id);
+  assert.equal(m.groups.length, 4);
+  assert.equal(where(m), 2);
+  assert.equal(m.activeGroupId, g[3].id);
+});
+
+test('showPreviewRight: Preview as the only tab of A stays put (A is not dissolved)', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  m.addTab(a.id, { kind: 'preview' });
+  m.showPreviewRight(a.id);
+  assert.deepEqual(kinds(m), [['preview']]);
+  assert.equal(m.activeGroupId, a.id);
+});

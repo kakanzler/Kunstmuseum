@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
 const {
-  app, BrowserWindow, Menu, protocol, net, nativeImage, ipcMain, dialog, shell, clipboard, screen,
+  app, BrowserWindow, Menu, protocol, net, nativeImage, ipcMain, dialog, shell, clipboard, screen, powerSaveBlocker,
 } = require('electron');
 const fsops = require('./fsops');
 const { Store } = require('./store');
@@ -188,10 +188,18 @@ function watchRoot(root) {
   const key = fsops.normKey(root);
   if (watchers.has(key)) return;
   try {
-    const w = fs.watch(root, { recursive: true }, (_type, filename) => {
+    const w = fs.watch(root, { recursive: true }, (type, filename) => {
       if (!filename) { queueChange(root); return; }
       const full = path.join(root, String(filename));
-      queueChange(path.dirname(full));
+      if (type !== 'change') { queueChange(path.dirname(full)); return; }
+      // Reading an image (Preview, thumbnails, scans) updates its last-access
+      // time, which Windows reports as 'change'; folders report their own
+      // timestamp updates the same way. Ignore both, otherwise every
+      // selection reloads the gallery and rebuilds all tiles (visible flash).
+      fs.stat(full, (err, st) => {
+        if (!err && fsops.isIgnorableChange(type, st)) return;
+        queueChange(path.dirname(full));
+      });
     });
     w.on('error', () => unwatchRoot(root));
     watchers.set(key, { root, watcher: w });
@@ -379,7 +387,38 @@ function registerIpc() {
     return { ...libSnapshot(), images };
   });
 
+  // スクリーン表示モード: fullscreen + no display sleep while active
+  handle('screen:enter', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) throw new Error('ウィンドウがありません。');
+    if (!screenMode) {
+      screenMode = {
+        wasFullScreen: mainWindow.isFullScreen(),
+        blockerId: powerSaveBlocker.start('prevent-display-sleep'),
+      };
+      mainWindow.setFullScreen(true);
+    }
+    return { wasFullScreen: screenMode.wasFullScreen };
+  });
+  handle('screen:exit', () => {
+    endScreenMode();
+    return true;
+  });
+  handle('win:isFullScreen', () => !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()));
+
   ipcMain.on('smoke:report', (_ev, report) => smokeFinish(report));
+}
+
+// ---------------------------------------------------------------------------
+// Screen mode state
+// ---------------------------------------------------------------------------
+let screenMode = null; // { wasFullScreen, blockerId }
+
+function endScreenMode() {
+  if (!screenMode) return;
+  const { wasFullScreen, blockerId } = screenMode;
+  screenMode = null;
+  if (powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId);
+  if (mainWindow && !mainWindow.isDestroyed() && !wasFullScreen) mainWindow.setFullScreen(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +483,10 @@ function createWindow() {
   mainWindow.on('resize', queueBounds);
   mainWindow.on('move', queueBounds);
   mainWindow.on('close', saveBounds);
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    endScreenMode();
+    mainWindow = null;
+  });
   mainWindow.once('ready-to-show', () => {
     if (SMOKE) mainWindow.showInactive(); // visible so layout/IntersectionObserver run normally
     else mainWindow.show();

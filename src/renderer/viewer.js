@@ -23,6 +23,7 @@ export class ImageViewer {
     this.ty = 0;
     this.fitted = true;
     this.token = 0;
+    this.swaps = 0;
 
     this.nameEl = el('div', { class: 'iv-name' });
     this.posEl = el('div', { class: 'muted small iv-pos' });
@@ -120,7 +121,12 @@ export class ImageViewer {
     this.nextBtn.disabled = true;
   }
 
-  /** Display `item`; `pos` = {index,total} for the position label. */
+  /**
+   * Display `item`; `pos` = {index,total} for the position label.
+   * The current image stays on screen until the next one is fully decoded
+   * offscreen; then src, size and fit are applied in the same task, so no
+   * empty or half-decoded frame is ever painted. Stale loads are dropped.
+   */
   setItem(item, pos) {
     this.setPosition(pos);
     this.nameEl.textContent = item.name;
@@ -129,36 +135,36 @@ export class ImageViewer {
     this.item = item;
     if (same) return Promise.resolve();
     const token = ++this.token;
-    this.isSvg = (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.svg';
-    this.msg.classList.add('hidden');
-    return new Promise((resolve) => {
-      const probe = new Image();
-      probe.decoding = 'async';
-      probe.onload = () => {
-        if (token !== this.token) { resolve(); return; }
-        this.natW = probe.naturalWidth || 0;
-        this.natH = probe.naturalHeight || 0;
-        if (!this.natW || !this.natH) {
-          const r = this.stage.getBoundingClientRect();
-          this.natW = Math.round(r.width * 0.8) || 800;
-          this.natH = Math.round(r.height * 0.8) || 600;
-        }
-        this.img.src = probe.src;
-        this.img.style.visibility = 'visible';
-        this.fit();
-        resolve();
-      };
-      probe.onerror = () => {
-        if (token !== this.token) { resolve(); return; }
-        this.natW = 0;
-        this.img.removeAttribute('src');
-        this.img.style.visibility = 'hidden';
-        this.msg.textContent = 'この画像を表示できません。';
-        this.msg.classList.remove('hidden');
-        this.hud.textContent = '—';
-        resolve();
-      };
-      probe.src = fileUrl(item);
+    const isSvg = (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.svg';
+    const url = fileUrl(item);
+    const probe = new Image();
+    probe.decoding = 'async';
+    probe.src = url;
+    return probe.decode().then(() => {
+      if (token !== this.token) return;
+      let w = probe.naturalWidth || 0;
+      let h = probe.naturalHeight || 0;
+      if (!w || !h) {
+        const r = this.stage.getBoundingClientRect();
+        w = Math.round(r.width * 0.8) || 800;
+        h = Math.round(r.height * 0.8) || 600;
+      }
+      this.natW = w;
+      this.natH = h;
+      this.isSvg = isSvg;
+      this.img.src = url; // same URL → served decoded from the memory cache
+      this.swaps++;
+      this.img.style.visibility = 'visible';
+      this.msg.classList.add('hidden');
+      this.fit();
+    }, () => {
+      if (token !== this.token) return;
+      this.natW = 0;
+      this.img.removeAttribute('src');
+      this.img.style.visibility = 'hidden';
+      this.msg.textContent = 'この画像を表示できません。';
+      this.msg.classList.remove('hidden');
+      this.hud.textContent = '—';
     });
   }
 

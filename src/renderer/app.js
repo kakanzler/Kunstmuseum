@@ -6,6 +6,7 @@ import * as sidebar from './sidebar.js';
 import { initInspector } from './inspector.js';
 import { openTagManager } from './tags.js';
 import { wb } from './workbench.js';
+import { openScreenDialog, isScreenActive } from './screen.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -63,8 +64,27 @@ function initResizers() {
   }
 }
 
+function isScreenShortcut(e) {
+  return (e.ctrlKey || e.metaKey) && e.altKey && e.shiftKey && (e.code === 'KeyO' || e.key.toLowerCase() === 'o');
+}
+
 function onKeyDown(e) {
+  if (isScreenActive()) return; // the slideshow owns the keyboard (capture listener)
+  if (isScreenShortcut(e)) {
+    // スクリーン表示: from anywhere, except while editing text or in another modal
+    if (isModalOpen() || isEditable(e.target)) return;
+    e.preventDefault();
+    openScreenDialog(wb);
+    return;
+  }
   if (isModalOpen()) return;
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.code === 'KeyP' || e.key.toLowerCase() === 'p')) {
+    // Alt+P: Preview in the group to the right (focus stays here)
+    if (isEditable(e.target)) return;
+    e.preventDefault();
+    wb.showPreviewRight();
+    return;
+  }
   if (wb.handleKey(e)) return;                 // Ctrl+W, Ctrl+\, Ctrl+1..4, Ctrl+Tab
   if (isEditable(e.target)) return;
   if (sidebar.hasFocus()) { sidebar.handleKey(e); return; }

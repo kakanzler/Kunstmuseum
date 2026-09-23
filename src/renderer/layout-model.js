@@ -388,6 +388,64 @@ export class LayoutModel {
     return this.tab(tabId);
   }
 
+  /**
+   * Alt+P: show the Preview tab in the group to the right of `activeGroupId`
+   * (A), keeping A the active group.
+   * 1. No Preview: open it in the group right of A (a new group when A is the
+   *    rightmost; at the group limit the rightmost group other than A; A only
+   *    as a last resort).
+   * 2. Preview already right of A: just make it that group's active tab.
+   * 3. Preview in A or left of A: move it right of A (same target rules);
+   *    a group left empty is removed as usual.
+   * Returns the Preview tab.
+   */
+  showPreviewRight(activeGroupId = this.activeGroupId) {
+    let A = this.group(activeGroupId) || this.activeGroup() || this.groups[0];
+    if (!A) A = this.addGroup();
+    const mru = [...this.mru];
+    const existing = this.findSingleton('preview');
+    const pg = existing ? this.groupOf(existing.id) : null;
+    const ai = this.groupIndex(A.id);
+    const keepFocus = (tab, g) => {
+      g.activeTabId = tab.id;
+      this.activeGroupId = this.group(A.id) ? A.id : g.id;
+      const ids = new Set(this.allTabs().map((t) => t.id));
+      this.mru = mru.filter((id) => ids.has(id));
+    };
+
+    // 2. already to the right of A
+    if (pg && this.groupIndex(pg.id) > ai) {
+      keepFocus(existing, pg);
+      return existing;
+    }
+    // Preview is A's only tab: moving it would dissolve A itself
+    if (pg === A && A.tabs.length === 1) {
+      keepFocus(existing, A);
+      return existing;
+    }
+
+    let target = this.groups[ai + 1] || null;
+    if (!target) {
+      target = this.addGroup(A.id, 'right');
+      if (!target) {
+        const others = this.groups.filter((g) => g.id !== A.id);
+        target = others[others.length - 1] || A;
+      }
+    }
+
+    let tab;
+    if (!existing) {
+      tab = { id: this._newId('t'), kind: 'preview' };
+      target.tabs.push(tab);
+    } else if (pg === target) {
+      tab = existing;
+    } else {
+      tab = this.moveTab(existing.id, target.id);
+    }
+    keepFocus(tab, this.groupOf(tab.id));
+    return tab;
+  }
+
   /** Retarget an image tab to a new path (e.g. ←/→ navigation or rename). */
   setTabPath(tabId, path) {
     const t = this.tab(tabId);

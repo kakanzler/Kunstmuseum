@@ -63,6 +63,31 @@ test('listDir returns subfolders then images, naturally sorted, with probes', as
   assert.equal(r.files[0].path, path.join(dir, 'img2.PNG'));
 });
 
+test('isIgnorableChange: access-time and folder-timestamp events are ignored, real edits are not', () => {
+  const now = 1_000_000_000;
+  const file = (m, c) => ({ mtimeMs: m, ctimeMs: c, isDirectory: () => false });
+  const old = file(now - 86_400_000, now - 86_400_000);
+  assert.equal(fsops.isIgnorableChange('change', old, now), true, 'last-access only');
+  assert.equal(fsops.isIgnorableChange('change', file(now - 100, old.ctimeMs), now), false, 'content write');
+  assert.equal(fsops.isIgnorableChange('change', file(old.mtimeMs, now - 100), now), false, 'metadata change');
+  assert.equal(fsops.isIgnorableChange('change', { mtimeMs: now, ctimeMs: now, isDirectory: () => true }, now), true, 'folder timestamps');
+  assert.equal(fsops.isIgnorableChange('rename', old, now), false, 'create/delete/rename always count');
+  assert.equal(fsops.isIgnorableChange('change', null, now), false, 'vanished entry counts');
+});
+
+test('reading a file only touches atime (mtime/ctime unchanged)', async () => {
+  const f = write(path.join(dir, 'r.png'), 'data');
+  const past = new Date(Date.now() - 3 * 86_400_000);
+  fs.utimesSync(f, past, past);
+  const before = fs.statSync(f);
+  await new Promise((r) => setTimeout(r, 30));
+  fs.readFileSync(f);
+  const after = fs.statSync(f);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.equal(after.ctimeMs, before.ctimeMs);
+  assert.equal(fsops.isIgnorableChange('change', after, before.ctimeMs + 10_000), true);
+});
+
 test('isInside is a real path-prefix check (case-insensitive on win32)', () => {
   const root = path.join(dir, 'root');
   assert.ok(fsops.isInside(root, path.join(root, 'a', 'b.png')));

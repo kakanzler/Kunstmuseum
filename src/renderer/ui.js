@@ -44,7 +44,7 @@ export function showContextMenu(x, y, items) {
   for (const it of items) {
     if (!it) continue;
     if (it.separator) { menu.append(el('div', { class: 'ctx-sep' })); continue; }
-    const row = el('div', { class: `ctx-item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}` }, it.label);
+    const row = el('div', { class: `ctx-item${it.danger ? ' danger' : ''}${it.disabled ? ' disabled' : ''}`, title: it.title || null }, it.label);
     row.addEventListener('click', () => {
       hideContextMenu();
       Promise.resolve().then(it.action).catch((e) => toastError(e));
