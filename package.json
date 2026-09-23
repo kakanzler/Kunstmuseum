@@ -1,0 +1,20 @@
+{
+  "name": "kunstmuseum",
+  "productName": "Kunstmuseum",
+  "version": "0.1.0",
+  "description": "Kunstmuseum — タグと知識グラフで画像を整理するデスクトップ画像ビューア",
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/smoke.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "cytoscape": "^3.34.3"
+  },
+  "devDependencies": {
+    "electron": "^44.4.4"
+  }
+}
