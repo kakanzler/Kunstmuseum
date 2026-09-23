@@ -40,10 +40,7 @@ export function initSidebar(context) {
   $('btn-add-folder').addEventListener('click', addFoldersDialog);
   const toggle = $('show-files');
   toggle.checked = showFiles();
-  toggle.addEventListener('change', () => {
-    saveSettings({ showFiles: toggle.checked });
-    renderTree();
-  });
+  toggle.addEventListener('change', () => setShowFiles(toggle.checked));
 
   registerItemLookup((p) => {
     const c = cache.get(normKey(dirname(p)));
@@ -618,13 +615,23 @@ export function handleKey(e) {
         renderTree();
       }
       return true;
-    case 'F2':
-      e.preventDefault();
-      if (cur && (cur.type === 'file' || cur.type === 'folder') && cur.exists !== false) startRename(cur.path);
-      return true;
     default:
       return false;
   }
+}
+
+/** 名前の変更 command while the tree has focus: inline rename of the focused row. */
+export function renameFocused() {
+  const cur = rows.find((r) => r.path === focusPath);
+  if (cur && (cur.type === 'file' || cur.type === 'folder') && cur.exists !== false) startRename(cur.path);
+}
+
+/** 一般 › サイドバーにファイルを表示 */
+export function setShowFiles(v) {
+  saveSettings({ showFiles: !!v });
+  const t = document.getElementById('show-files');
+  if (t) t.checked = !!v;
+  renderTree();
 }
 
 // ---------- testing hooks ----------

@@ -128,7 +128,6 @@ export class GraphPane {
     this.fit();
   }
   handleKey(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === '0') { e.preventDefault(); this.fit(); return true; }
     if (e.key === 'Escape' && this.pinned) { this.pinned = null; this.clearHighlight(); return true; }
     return false;
   }

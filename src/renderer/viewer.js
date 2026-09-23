@@ -3,6 +3,7 @@
 // Ctrl+wheel zoom at the cursor, drag to pan, Ctrl+0 / middle-click / 0 → fit,
 // 1 → 100%, double-click toggles 100% ⇔ fit, HUD with the zoom level.
 import { el, fileUrl } from './ui.js';
+import { keyLabel } from './commands.js';
 
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
@@ -33,7 +34,7 @@ export class ImageViewer {
     this.bar = el('div', { class: 'iv-bar' },
       this.nameEl, this.posEl, el('div', { class: 'spacer' }),
       this.prevBtn, this.nextBtn,
-      btn('全体', '画面に合わせる (Ctrl+0 / 中クリック / 0)', () => this.fit()),
+      btn('全体', `画面に合わせる (${keyLabel('view.resetZoom')} / 中クリック / 0)`, () => this.fit()),
       btn('100%', '等倍 (1)', () => this.zoomTo(1)));
     this.img = el('img', { class: 'iv-img', alt: '', draggable: 'false' });
     this.msg = el('div', { class: 'iv-msg' }, opts.emptyText || '');
@@ -255,12 +256,15 @@ export class ImageViewer {
     const ctrl = e.ctrlKey || e.metaKey;
     if (!ctrl && !e.altKey && (k === 'ArrowRight' || k === 'PageDown')) { e.preventDefault(); this.navigate(1); return true; }
     if (!ctrl && !e.altKey && (k === 'ArrowLeft' || k === 'PageUp')) { e.preventDefault(); this.navigate(-1); return true; }
-    if (ctrl && k === '0') { e.preventDefault(); this.fit(); return true; }
     if (ctrl && (k === '+' || k === '=' || k === ';')) { e.preventDefault(); this.zoomBy(STEP); return true; }
     if (ctrl && k === '-') { e.preventDefault(); this.zoomBy(1 / STEP); return true; }
     if (!ctrl && !e.altKey && k === '1') { e.preventDefault(); this.zoomTo(1); return true; }
     if (!ctrl && !e.altKey && k === '0') { e.preventDefault(); this.fit(); return true; }
-    if (k === 'F2' && this.opts.onRename && this.item) { e.preventDefault(); this.opts.onRename(); return true; }
     return false;
+  }
+
+  /** 名前の変更 command (bound in the keymap). */
+  rename() {
+    if (this.opts.onRename && this.item) this.opts.onRename();
   }
 }

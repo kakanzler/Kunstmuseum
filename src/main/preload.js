@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
   appInfo: call('app:info'),
   warnings: call('app:warnings'),
+  appPaths: call('app:paths'),
+  openUserData: call('app:openUserData'),
 
   getSettings: call('settings:get'),
   setSettings: call('settings:set'),

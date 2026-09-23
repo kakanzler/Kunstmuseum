@@ -337,3 +337,83 @@ test('showPreviewRight: Preview as the only tab of A stays put (A is not dissolv
   assert.deepEqual(kinds(m), [['preview']]);
   assert.equal(m.activeGroupId, a.id);
 });
+
+// ---------- Alt+Q: showSingletonRight('graph') ----------
+test('showSingletonRight(graph) case 1: no graph → new group right of the rightmost active group', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  const t = m.showSingletonRight('graph', a.id);
+  assert.equal(t.kind, 'graph');
+  assert.deepEqual(kinds(m), [['gallery'], ['graph']]);
+  assert.equal(m.groups[1].activeTabId, t.id);
+  assert.equal(m.activeGroupId, a.id);
+  assert.equal(m.activeTab().id, gal.id);
+});
+
+test('showSingletonRight(graph) case 1 at 4 groups with A rightmost → rightmost group other than A', () => {
+  const m = new LayoutModel();
+  const g = [m.addGroup()];
+  for (let i = 0; i < 3; i++) g.push(m.addGroup(g[i].id, 'right'));
+  g.forEach((x) => m.addTab(x.id, { kind: 'gallery' }));
+  m.activateGroup(g[3].id);
+  m.showSingletonRight('graph', g[3].id);
+  assert.equal(m.groups.length, 4);
+  assert.equal(where(m, 'graph'), 2);
+  assert.equal(m.activeGroupId, g[3].id);
+});
+
+test('showSingletonRight(graph) case 2: already right → activated only, idempotent', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  m.addTab(a.id, { kind: 'gallery' });
+  const b = m.addGroup(a.id, 'right');
+  const gr = m.addTab(b.id, { kind: 'graph' });
+  m.addTab(b.id, { kind: 'image', path: 'z.png' });
+  m.activateGroup(a.id);
+  const before = kinds(m);
+  m.showSingletonRight('graph', a.id);
+  assert.deepEqual(kinds(m), before);
+  assert.equal(m.group(b.id).activeTabId, gr.id);
+  assert.equal(m.activeGroupId, a.id);
+  const snap = JSON.stringify(m.serialize());
+  m.showSingletonRight('graph', a.id);
+  assert.equal(JSON.stringify(m.serialize()), snap);
+});
+
+test('showSingletonRight(graph) case 3: from the left and from inside A', () => {
+  const m = new LayoutModel();
+  const left = m.addGroup();
+  m.addTab(left.id, { kind: 'graph' });
+  const a = m.addGroup(left.id, 'right');
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  m.activateTab(gal.id);
+  m.showSingletonRight('graph', a.id);
+  assert.deepEqual(kinds(m), [['gallery'], ['graph']], 'moved right, empty left group removed');
+  assert.equal(m.activeGroupId, a.id);
+
+  const m2 = new LayoutModel();
+  const a2 = m2.addGroup();
+  const gal2 = m2.addTab(a2.id, { kind: 'gallery' });
+  const gr2 = m2.addTab(a2.id, { kind: 'graph' });
+  m2.activateTab(gr2.id);
+  m2.showSingletonRight('graph', a2.id);
+  assert.deepEqual(kinds(m2), [['gallery'], ['graph']]);
+  assert.equal(m2.group(a2.id).activeTabId, gal2.id);
+  assert.equal(m2.activeGroupId, a2.id);
+});
+
+test('Alt+P then Alt+Q: Preview and graph share the right-hand group', () => {
+  const m = new LayoutModel();
+  const a = m.addGroup();
+  const gal = m.addTab(a.id, { kind: 'gallery' });
+  m.activateTab(gal.id);
+  const p = m.showPreviewRight(a.id);
+  const g = m.showSingletonRight('graph', a.id);
+  assert.deepEqual(kinds(m), [['gallery'], ['preview', 'graph']]);
+  assert.equal(m.groups[1].activeTabId, g.id, 'the last shown is the active tab there');
+  assert.ok(p);
+  assert.equal(m.activeGroupId, a.id);
+  assert.equal(m.activeTab().id, gal.id);
+  assert.throws(() => m.showSingletonRight('gallery', a.id));
+});

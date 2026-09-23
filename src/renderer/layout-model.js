@@ -389,21 +389,23 @@ export class LayoutModel {
   }
 
   /**
-   * Alt+P: show the Preview tab in the group to the right of `activeGroupId`
-   * (A), keeping A the active group.
-   * 1. No Preview: open it in the group right of A (a new group when A is the
+   * Alt+P / Alt+Q: show a singleton tab (`preview` or `graph`) in the group
+   * to the right of `activeGroupId` (A), keeping A the active group.
+   * 1. Not open: open it in the group right of A (a new group when A is the
    *    rightmost; at the group limit the rightmost group other than A; A only
    *    as a last resort).
-   * 2. Preview already right of A: just make it that group's active tab.
-   * 3. Preview in A or left of A: move it right of A (same target rules);
-   *    a group left empty is removed as usual.
-   * Returns the Preview tab.
+   * 2. Already right of A: just make it that group's active tab.
+   * 3. In A or left of A: move it right of A (same target rules); a group
+   *    left empty is removed as usual.
+   * Two singletons shown this way share the right-hand group as tabs.
+   * Returns the tab.
    */
-  showPreviewRight(activeGroupId = this.activeGroupId) {
+  showSingletonRight(kind, activeGroupId = this.activeGroupId) {
+    if (!SINGLETONS.has(kind)) throw new Error(`not a singleton kind: ${kind}`);
     let A = this.group(activeGroupId) || this.activeGroup() || this.groups[0];
     if (!A) A = this.addGroup();
     const mru = [...this.mru];
-    const existing = this.findSingleton('preview');
+    const existing = this.findSingleton(kind);
     const pg = existing ? this.groupOf(existing.id) : null;
     const ai = this.groupIndex(A.id);
     const keepFocus = (tab, g) => {
@@ -418,7 +420,7 @@ export class LayoutModel {
       keepFocus(existing, pg);
       return existing;
     }
-    // Preview is A's only tab: moving it would dissolve A itself
+    // the tab is A's only tab: moving it would dissolve A itself
     if (pg === A && A.tabs.length === 1) {
       keepFocus(existing, A);
       return existing;
@@ -435,7 +437,7 @@ export class LayoutModel {
 
     let tab;
     if (!existing) {
-      tab = { id: this._newId('t'), kind: 'preview' };
+      tab = { id: this._newId('t'), kind };
       target.tabs.push(tab);
     } else if (pg === target) {
       tab = existing;
@@ -444,6 +446,11 @@ export class LayoutModel {
     }
     keepFocus(tab, this.groupOf(tab.id));
     return tab;
+  }
+
+  /** Alt+P: Preview to the right of the active group (see showSingletonRight). */
+  showPreviewRight(activeGroupId = this.activeGroupId) {
+    return this.showSingletonRight('preview', activeGroupId);
   }
 
   /** Retarget an image tab to a new path (e.g. ←/→ navigation or rename). */

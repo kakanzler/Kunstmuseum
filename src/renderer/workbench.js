@@ -3,6 +3,7 @@
 import { LayoutModel } from './layout-model.js';
 import { api, state, emit, on, saveSettings, isWin, samePath, remapUnder, pathUnder } from './state.js';
 import { el, showContextMenu } from './ui.js';
+import { keyLabel } from './commands.js';
 import { GalleryPane, defaultGalleryState } from './gallery.js';
 import { GraphPane } from './graph.js';
 import { PreviewPane, ImagePane } from './imagepanes.js';
@@ -40,6 +41,7 @@ class Workbench {
     on('paths-moved', ({ moved }) => this.remapImageTabs(byPath(moved)));
     on('folder-renamed', ({ from, to }) => this.remapImageTabs((p) => remapUnder(p, from, to)));
     on('roots-changed', () => this.dropTabsOutsideRoots());
+    on('keymap-changed', () => { if (this.model) this.render(); });
 
     let model = null;
     const saved = state.settings.layout;
@@ -172,8 +174,8 @@ class Workbench {
       const r = add.getBoundingClientRect();
       showContextMenu(r.left, r.bottom + 2, [
         { label: 'ギャラリー', action: () => this.addFromMenu(ge.id, 'gallery') },
-        { label: '知識グラフ', action: () => this.addFromMenu(ge.id, 'graph') },
-        { label: 'Preview', title: 'Alt+P: アクティブなグループの右に Preview を表示', action: () => this.addFromMenu(ge.id, 'preview') },
+        { label: '知識グラフ', title: `${keyLabel('graph.showRight')}: アクティブなグループの右に知識グラフを表示`, action: () => this.addFromMenu(ge.id, 'graph') },
+        { label: 'Preview', title: `${keyLabel('preview.showRight')}: アクティブなグループの右に Preview を表示`, action: () => this.addFromMenu(ge.id, 'preview') },
       ]);
       e.stopPropagation();
     });
@@ -287,7 +289,7 @@ class Workbench {
   tabEl(tab, g) {
     const p = this.pane(tab.id);
     const title = el('span', { class: 'etab-title' }, p ? p.title() : tab.kind);
-    const close = el('button', { class: 'etab-close', title: '閉じる (Ctrl+W)' }, '×');
+    const close = el('button', { class: 'etab-close', title: `閉じる (${keyLabel('tab.close')})` }, '×');
     const t = el('div', {
       class: `etab${tab.id === g.activeTabId ? ' active' : ''}${p && p.italic ? ' italic' : ''}`,
       draggable: 'true',
@@ -528,28 +530,24 @@ class Workbench {
   }
 
   /**
-   * Alt+P: show Preview in the group right of the active group while the
-   * active group and the keyboard focus stay where they are.
+   * Preview を右に表示 / 知識グラフを右に表示 (Alt+P / Alt+Q by default): show
+   * the singleton tab in the group right of the active group while the active
+   * group and the keyboard focus stay where they are.
    */
-  showPreviewRight() {
+  showSingletonRight(kind) {
     const focused = document.activeElement;
-    const tab = this.model.showPreviewRight(this.model.activeGroupId);
+    const tab = this.model.showSingletonRight(kind, this.model.activeGroupId);
     this.commit();
     if (focused && focused !== document.body && focused.isConnected) focused.focus({ preventScroll: true });
     return tab;
   }
 
-  // ---------- keyboard ----------
-  handleKey(e) {
-    const ctrl = e.ctrlKey || e.metaKey;
-    if (!ctrl || e.altKey) return false;
-    if (!e.shiftKey && e.key.toLowerCase() === 'w') { e.preventDefault(); this.closeActive(); return true; }
-    if (e.key === '\\' || e.code === 'Backslash' || e.code === 'IntlYen') { e.preventDefault(); this.splitActive('right'); return true; }
-    const m = /^Digit([1-4])$/.exec(e.code) || /^([1-4])$/.exec(e.key);
-    if (m && !e.shiftKey) { e.preventDefault(); this.focusGroup(Number(m[1]) - 1); return true; }
-    if (e.key === 'Tab') { e.preventDefault(); this.cycle(e.shiftKey ? -1 : 1); return true; }
-    return false;
+  showPreviewRight() {
+    return this.showSingletonRight('preview');
   }
+
+  // Global shortcuts (close, split, group focus, tab cycling, …) are keymap
+  // commands registered in app.js; see keymap.js for the defaults.
 
   // ---------- persistence ----------
   serialize() {

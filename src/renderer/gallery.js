@@ -684,7 +684,7 @@ export class GalleryPane {
       this.selectIndex(next, { range: e.shiftKey });
       this.scrollToPath(this.view[next].path);
     };
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); this.selectAll(); return true; }
+    // Ctrl+A / F2 are keymap commands (selectAll(), rename()); only fixed context keys here
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     switch (e.key) {
       case 'ArrowRight': e.preventDefault(); move(1); return true;
@@ -698,20 +698,21 @@ export class GalleryPane {
         if (i >= 0) { e.preventDefault(); this.ctx.openImage(this.view[i].path, { fromPane: this }); }
         return true;
       }
-      case 'F2': {
-        e.preventDefault();
-        const paths = this.selectedPaths();
-        const target = this.focus && this.selection.has(this.focus) ? this.focus : paths[0];
-        if (paths.length > 1) toast('名前の変更は1枚ずつ行ってください。');
-        else if (target) this.startRename(this.itemsByPath.get(target));
-        return true;
-      }
       case 'Escape':
         if (this.selection.size) { this.clearSelection(); return true; }
         return false;
       default:
         return false;
     }
+  }
+
+  /** 名前の変更 command: inline rename of the focused/selected image. */
+  rename() {
+    if (this.renaming) return;
+    const paths = this.selectedPaths();
+    const target = this.focus && this.selection.has(this.focus) ? this.focus : paths[0];
+    if (paths.length > 1) toast('名前の変更は1枚ずつ行ってください。');
+    else if (target) this.startRename(this.itemsByPath.get(target));
   }
 
   // ---------- inline rename ----------

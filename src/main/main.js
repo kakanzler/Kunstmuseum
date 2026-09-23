@@ -267,6 +267,12 @@ function registerIpc() {
     version: app.getVersion(),
     exts: fsops.SUPPORTED_EXTS,
   }));
+  handle('app:paths', () => ({ userData: app.getPath('userData'), version: app.getVersion() }));
+  handle('app:openUserData', async () => {
+    const err = await shell.openPath(app.getPath('userData'));
+    if (err) throw new Error(err);
+    return true;
+  });
   handle('app:warnings', () => (store.loadWarning ? [store.loadWarning] : []));
 
   handle('settings:get', () => store.getSettings());

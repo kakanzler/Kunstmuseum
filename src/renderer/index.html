@@ -11,7 +11,7 @@
 <body>
   <header class="topbar">
     <div class="brand">Kunstmuseum</div>
-    <div class="topbar-hint muted small">Ctrl+\ 分割・Ctrl+W 閉じる・Ctrl+1〜4 グループ移動</div>
+    <div id="topbar-hint" class="topbar-hint muted small"></div>
     <div class="topbar-right">
       <button id="btn-tag-manager" class="btn">タグ管理</button>
     </div>
@@ -25,6 +25,9 @@
       </div>
       <div id="tree" class="tree" tabindex="0"></div>
       <div class="sidebar-hint">エクスプローラーからフォルダをドロップして追加できます</div>
+      <div class="sidebar-foot">
+        <button id="btn-settings" class="btn subtle block settings-btn" title="設定">⚙ 設定</button>
+      </div>
     </aside>
     <div class="resizer" data-resize="sidebar" title="ドラッグで幅を変更"></div>
 

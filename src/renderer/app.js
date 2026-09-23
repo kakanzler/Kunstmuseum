@@ -1,12 +1,14 @@
 // Renderer entry point: bootstrap, global keyboard routing, panel resizers,
 // smoke test.
-import { api, state, setLib, saveSettings, emit, flushSettings, galleries } from './state.js';
+import { api, state, setLib, saveSettings, emit, on, flushSettings, galleries } from './state.js';
 import { toast, toastError, isModalOpen, isEditable } from './ui.js';
 import * as sidebar from './sidebar.js';
 import { initInspector } from './inspector.js';
 import { openTagManager } from './tags.js';
 import { wb } from './workbench.js';
 import { openScreenDialog, isScreenActive } from './screen.js';
+import { initKeymap, registerCommands, commandForEvent, runCommand, keyLabel } from './commands.js';
+import { toggleSettings, isSettingsOpen } from './settings.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -64,37 +66,66 @@ function initResizers() {
   }
 }
 
-function isScreenShortcut(e) {
-  return (e.ctrlKey || e.metaKey) && e.altKey && e.shiftKey && (e.code === 'KeyO' || e.key.toLowerCase() === 'o');
-}
-
+/**
+ * Global shortcuts go through the keymap (settings › ホットキー). Guards: none
+ * while editing text, in screen mode or in another modal; while 設定 is open
+ * only its own shortcut works (it closes it). Fixed context keys (arrows,
+ * Enter, viewer 1/0, …) are handled by the tree / the active pane.
+ */
 function onKeyDown(e) {
   if (isScreenActive()) return; // the slideshow owns the keyboard (capture listener)
-  if (isScreenShortcut(e)) {
-    // スクリーン表示: from anywhere, except while editing text or in another modal
-    if (isModalOpen() || isEditable(e.target)) return;
-    e.preventDefault();
-    openScreenDialog(wb);
+  const id = commandForEvent(e);
+  if (isSettingsOpen()) {
+    if (id === 'settings.open') { e.preventDefault(); toggleSettings(settingsCtx); }
     return;
   }
   if (isModalOpen()) return;
-  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.code === 'KeyP' || e.key.toLowerCase() === 'p')) {
-    // Alt+P: Preview in the group to the right (focus stays here)
-    if (isEditable(e.target)) return;
+  if (isEditable(e.target)) return;
+  if (id) {
     e.preventDefault();
-    wb.showPreviewRight();
+    runCommand(id);
     return;
   }
-  if (wb.handleKey(e)) return;                 // Ctrl+W, Ctrl+\, Ctrl+1..4, Ctrl+Tab
-  if (isEditable(e.target)) return;
   if (sidebar.hasFocus()) { sidebar.handleKey(e); return; }
   const p = wb.activePane();
-  if ((e.ctrlKey || e.metaKey) && e.key === '0') {
-    e.preventDefault();
-    if (p) p.resetZoom();
-    return;
-  }
   if (p && p.handleKey) p.handleKey(e);
+}
+
+const settingsCtx = { setShowFiles: (v) => sidebar.setShowFiles(v) };
+
+function registerAllCommands() {
+  const pane = () => wb.activePane();
+  registerCommands({
+    'preview.showRight': () => wb.showSingletonRight('preview'),
+    'graph.showRight': () => wb.showSingletonRight('graph'),
+    'screen.open': () => openScreenDialog(wb),
+    'settings.open': () => toggleSettings(settingsCtx),
+    'tab.close': () => wb.closeActive(),
+    'tab.splitRight': () => wb.splitActive('right'),
+    'tab.next': () => wb.cycle(1),
+    'tab.prev': () => wb.cycle(-1),
+    'group.focus1': () => wb.focusGroup(0),
+    'group.focus2': () => wb.focusGroup(1),
+    'group.focus3': () => wb.focusGroup(2),
+    'group.focus4': () => wb.focusGroup(3),
+    'edit.rename': () => {
+      if (sidebar.hasFocus()) sidebar.renameFocused();
+      else if (pane() && pane().rename) pane().rename();
+    },
+    'edit.selectAll': () => { if (!sidebar.hasFocus() && pane() && pane().selectAll) pane().selectAll(); },
+    'view.resetZoom': () => { if (pane()) pane().resetZoom(); },
+    'view.refresh': () => {
+      const p = pane();
+      if (p && p.kind === 'gallery') p.reload();
+      else if (p && p.kind === 'graph') p.rebuild();
+      emit('refresh-requested');
+    },
+  });
+}
+
+/** Top-bar hint, rendered from the current bindings. */
+function renderHint() {
+  $('topbar-hint').textContent = `${keyLabel('tab.splitRight')} 分割・${keyLabel('tab.close')} 閉じる・${keyLabel('preview.showRight')} Preview・${keyLabel('graph.showRight')} グラフ・${keyLabel('settings.open')} 設定`;
 }
 
 async function boot() {
@@ -108,6 +139,11 @@ async function boot() {
   }
   const savedLayout = state.settings.layout ? JSON.parse(JSON.stringify(state.settings.layout)) : null;
 
+  initKeymap();
+  registerAllCommands();
+  renderHint();
+  on('keymap-changed', renderHint);
+  $('btn-settings').addEventListener('click', () => toggleSettings(settingsCtx));
   initResizers();
   sidebar.initSidebar(wb);
   initInspector(wb);

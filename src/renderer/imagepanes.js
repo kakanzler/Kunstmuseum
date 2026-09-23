@@ -77,6 +77,9 @@ export class PreviewPane {
   handleKey(e) {
     return this.viewer.handleKey(e);
   }
+  rename() {
+    this.viewer.rename();
+  }
   resetZoom() {
     this.viewer.fit();
   }
@@ -166,6 +169,9 @@ export class ImagePane {
   }
   handleKey(e) {
     return this.viewer.handleKey(e);
+  }
+  rename() {
+    this.viewer.rename();
   }
   resetZoom() {
     this.viewer.fit();

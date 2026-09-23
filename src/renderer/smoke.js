@@ -7,6 +7,10 @@ import { addTagsToPaths, openTagManager } from './tags.js';
 import { renameFolderTo } from './ops.js';
 import { inspectorPreviewImg } from './inspector.js';
 import { activeShow } from './screen.js';
+import { isCapturing } from './settings.js';
+import { bindings } from './commands.js';
+import { toOverrides } from './keymap.js';
+import { flushSettings } from './state.js';
 import { fileUrl } from './ui.js';
 
 const TAB_TYPE = 'application/x-km-tab';
@@ -347,6 +351,25 @@ async function phase1({ wb, sidebar, step, report }) {
     step(`Alt+P shows Preview right of the gallery, focus kept (${JSON.stringify(kinds(wb))})`);
   }
 
+  // 17. Alt+Q: knowledge graph right of the gallery, focus kept
+  {
+    wb.activate(galleryTabId);
+    g.grid.focus({ preventScroll: true });
+    key({ key: 'q', code: 'KeyQ', altKey: true });
+    const gt = wb.model.findSingleton('graph');
+    assert(gt, 'Alt+Q opened the graph');
+    const gg = wb.model.groupOf(gt.id);
+    assert(wb.model.groupIndex(gg.id) === wb.model.groupIndex(wb.model.groupOf(galleryTabId).id) + 1, 'graph right of the gallery ' + JSON.stringify(kinds(wb)));
+    assert(gg.activeTabId === gt.id, 'graph is the active tab of its group');
+    assert(wb.model.activeGroupId === wb.model.groupOf(galleryTabId).id, 'active group stays on the gallery');
+    assert(document.activeElement === g.grid, 'keyboard focus stays in the gallery');
+    await waitFor(() => wb.pane(gt.id).nodeCount() > 0, 10000, 'graph rendered after Alt+Q');
+    step('Alt+Q shows the graph right of the gallery, focus kept ' + JSON.stringify(kinds(wb)));
+  }
+
+  // 18. 設定 and the editable keymap
+  await settingsChecks({ wb, g, galleryTabId, step, report });
+
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
   const back = LayoutModel.restore(ser, { caseInsensitive: state.info.platform === 'win32' }).serialize((t) => t.state);
@@ -369,6 +392,35 @@ async function phase2({ wb, savedLayout, step, report }) {
   report.restored = kinds(wb);
   assert(sameJson(comparable(now), comparable(savedLayout)), `restored layout differs:\n${JSON.stringify(comparable(now))}\n${JSON.stringify(comparable(savedLayout))}`);
   assert(wb.model.allTabs().some((t) => t.kind === 'image'), 'image tab restored');
+
+  // keymap override from phase 1 survived the relaunch
+  assert(bindings().get('graph.showRight') === 'Ctrl+Alt+P', 'override restored (' + bindings().get('graph.showRight') + ')');
+  key({ key: ',', code: 'Comma', ctrlKey: true });
+  const sdlg = await waitFor(() => document.querySelector('.modal .settings-dialog'), 3000, '設定 opened');
+  assert(sdlg.querySelector('tr[data-command="graph.showRight"] kbd').textContent === 'Ctrl+Alt+P', 'settings shows the restored override');
+  // 操作説明 renders keys from the live keymap
+  sdlg.querySelector('.settings-nav-item[data-section="guide"]').click();
+  const guide = sdlg.querySelector('.settings-panel .guide');
+  assert(guide && [...guide.querySelectorAll('kbd')].some((k) => k.textContent === 'Ctrl+Alt+P'), '操作説明 shows the current (overridden) graph key');
+  // 一般: real data path + version, showFiles wired to the sidebar
+  sdlg.querySelector('.settings-nav-item[data-section="general"]').click();
+  const paths = await api.appPaths();
+  await waitFor(() => sdlg.querySelector('.gen-path').textContent === paths.userData, 3000, 'data path shown');
+  assert(sdlg.querySelector('.gen-version').textContent === paths.version && /^\d+\.\d+\.\d+/.test(paths.version), 'version shown');
+  const sf = sdlg.querySelector('.gen-show-files');
+  const before = document.getElementById('show-files').checked;
+  sf.click();
+  assert(document.getElementById('show-files').checked === !before && state.settings.showFiles === !before, 'サイドバーにファイルを表示 toggles the sidebar');
+  sf.click();
+  assert(document.getElementById('show-files').checked === before, 'toggled back');
+  sdlg.querySelector('.settings-nav-item[data-section="hotkeys"]').click();
+  step('設定 › 操作説明 uses the keymap; 一般 shows ' + paths.userData.split(/[\\/]/).pop() + ' / v' + paths.version + ' and drives the sidebar');
+  sdlg.querySelector('.kb-reset-all').click();
+  assert(sameJson(toOverrides(bindings()), {}), 'すべて既定に戻す cleared all overrides');
+  key({ key: 'Escape', code: 'Escape' });
+  await waitFor(() => !document.querySelector('.modal .settings-dialog'), 3000, '設定 closed');
+  await flushSettings();
+  step('keymap override survived the relaunch; すべて既定に戻す ok');
   step(`second launch restored the layout ${JSON.stringify(report.restored)}`);
 }
 
@@ -476,4 +528,81 @@ async function screenModeChecks({ root, tagId, step, report }) {
   await waitFor(() => !dlg(), 3000, 'dialog closed');
   report.screen = { folderImages: show.playlist.length, categoryImages: tagged.length };
   step('empty set: toast shown, not started');
+}
+
+async function settingsChecks({ wb, g, galleryTabId, step, report }) {
+  const dlg = () => document.querySelector('.modal .settings-dialog');
+  const ctrlComma = () => key({ key: ',', code: 'Comma', ctrlKey: true });
+  const esc = () => key({ key: 'Escape', code: 'Escape' });
+  const row = (id) => dlg().querySelector('tr[data-command="' + id + '"]');
+  const msgText = () => (dlg().querySelector('.kb-msg') || {}).textContent || '';
+  const openIt = async () => { ctrlComma(); return waitFor(dlg, 3000, '設定 opened'); };
+  const closeIt = async () => { esc(); await waitFor(() => !dlg(), 3000, '設定 closed'); };
+
+  await openIt();
+  await closeIt();
+  await openIt();
+  ctrlComma();
+  await waitFor(() => !dlg(), 3000, 'Ctrl+, toggles 設定 closed');
+  step('Ctrl+, opens 設定, Esc closes it, Ctrl+, toggles it');
+
+  // Esc during capture cancels without closing the modal
+  await openIt();
+  row('preview.showRight').querySelector('.kb-change').click();
+  assert(isCapturing(), 'capture mode');
+  assert(row('preview.showRight').textContent.includes('キーを押してください'), 'capture prompt shown');
+  esc();
+  assert(!isCapturing() && dlg(), 'Esc cancelled the capture and kept the modal open');
+  assert(bindings().get('preview.showRight') === 'Alt+P', 'binding unchanged after cancel');
+
+  // rebind Alt+P -> Ctrl+Alt+P through the capture UI (modifier-only presses are ignored)
+  row('preview.showRight').querySelector('.kb-change').click();
+  key({ key: 'Control', code: 'ControlLeft', ctrlKey: true });
+  assert(isCapturing(), 'modifier-only press keeps capturing');
+  key({ key: 'p', code: 'KeyP', ctrlKey: true, altKey: true });
+  assert(bindings().get('preview.showRight') === 'Ctrl+Alt+P', 'rebound to Ctrl+Alt+P');
+  assert(row('preview.showRight').querySelector('kbd').textContent === 'Ctrl+Alt+P', 'table shows the new combo');
+
+  // invalid combo is rejected inline
+  row('tab.close').querySelector('.kb-change').click();
+  key({ key: 'p', code: 'KeyP' });
+  assert(bindings().get('tab.close') === 'Ctrl+W' && /Ctrl または Alt/.test(msgText()), 'bare key rejected with a message');
+  await closeIt();
+
+  // the new combo works, the old one does not
+  const prev = () => wb.model.findSingleton('preview');
+  if (prev()) wb.closeTab(prev().id);
+  wb.activate(galleryTabId);
+  g.grid.focus({ preventScroll: true });
+  key({ key: 'p', code: 'KeyP', altKey: true });
+  assert(!prev(), 'old Alt+P no longer opens Preview');
+  key({ key: 'p', code: 'KeyP', ctrlKey: true, altKey: true });
+  assert(prev(), 'Ctrl+Alt+P opens Preview');
+  assert(wb.model.groupIndex(wb.model.groupOf(prev().id).id) === wb.model.groupIndex(wb.model.groupOf(galleryTabId).id) + 1, 'Preview right of the gallery');
+  assert(document.activeElement === g.grid, 'focus kept');
+  assert(document.getElementById('topbar-hint').textContent.includes('Ctrl+Alt+P'), 'top-bar hint follows the keymap');
+  step('rebound Preview to Ctrl+Alt+P via capture: new combo works, Alt+P does not; Esc cancels capture; invalid key rejected');
+
+  // conflict: graph -> Ctrl+Alt+P asks to swap
+  await openIt();
+  row('graph.showRight').querySelector('.kb-change').click();
+  key({ key: 'p', code: 'KeyP', ctrlKey: true, altKey: true });
+  await waitFor(() => dlg().querySelector('.kb-swap'), 2000, 'conflict prompt');
+  assert(msgText().includes('Preview を右に表示 と重複しています。入れ替えますか？'), 'conflict message: ' + msgText());
+  assert(bindings().get('graph.showRight') === 'Alt+Q', 'nothing changes before confirming');
+  dlg().querySelector('.kb-swap').click();
+  assert(bindings().get('graph.showRight') === 'Ctrl+Alt+P' && bindings().get('preview.showRight') === 'Alt+Q', 'bindings swapped');
+  step('conflict detected and swapped (graph Ctrl+Alt+P, Preview Alt+Q)');
+
+  // 既定に戻す: Preview back to Alt+P (free now)
+  row('preview.showRight').querySelector('.kb-reset').click();
+  assert(bindings().get('preview.showRight') === 'Alt+P', '既定に戻す restored Alt+P');
+  assert(row('preview.showRight').querySelector('.kb-reset').disabled, 'reset disabled at default');
+  await closeIt();
+  await flushSettings();
+  report.keybindings = toOverrides(bindings());
+  assert(sameJson(report.keybindings, { 'graph.showRight': 'Ctrl+Alt+P' }), 'overrides ' + JSON.stringify(report.keybindings));
+  const saved = (await api.getSettings()).keybindings;
+  assert(sameJson(saved, { 'graph.showRight': 'Ctrl+Alt+P' }), 'persisted overrides ' + JSON.stringify(saved));
+  step('既定に戻す ok; override persisted {graph.showRight: Ctrl+Alt+P}');
 }
