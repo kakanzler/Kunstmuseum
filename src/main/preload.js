@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('api', {
   renameFile: call('fs:renameFile'),
   renameDir: call('fs:renameDir'),
   move: call('fs:move'),
+  trash: call('fs:trash'),
 
   showItem: call('shell:showItem'),
   openPath: call('shell:openPath'),
@@ -59,6 +60,8 @@ contextBridge.exposeInMainWorld('api', {
   searchIndex: call('index:search'),
   addImageTags: call('images:addTags'),
   removeImageTags: call('images:removeTags'),
+  getImageView: call('images:getView'),
+  setImageView: call('images:setView'),
   graphData: call('graph:data'),
 
   getPathForFile: (file) => {

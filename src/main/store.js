@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const DEFAULT_SETTINGS = Object.freeze({
-  includeSubfolders: true,
+  includeSubfolders: false,
   sortKey: 'name',
   sortDir: 'asc',
   thumbSize: 160,
@@ -26,6 +26,15 @@ const SEED_TAG_TYPES = [
   { name: 'カテゴリ', color: '#6fa8dc' },
   { name: 'ジャンル', color: '#b48ead' },
 ];
+
+const finite = (x) => typeof x === 'number' && Number.isFinite(x);
+
+/** A valid saved viewer zoom, or null. */
+function cleanView(v) {
+  if (!v || !finite(v.scale) || !finite(v.cx) || !finite(v.cy)) return null;
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+  return { scale: clamp(v.scale, 0.05, 20), cx: clamp(v.cx, 0, 1), cy: clamp(v.cy, 0, 1) };
+}
 
 function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
@@ -91,6 +100,7 @@ class Store {
       tagTypes: SEED_TAG_TYPES.map((t) => ({ id: newId('tt'), name: t.name, color: t.color })),
       tags: [],
       images: {},
+      views: {},   // normalized image path → saved viewer zoom {scale, cx, cy}
     };
   }
 
@@ -129,6 +139,7 @@ class Store {
         : def.tagTypes,
       tags: [],
       images: {},
+      views: {},
     };
     if (!out.tagTypes.length) out.tagTypes = def.tagTypes;
     const typeIds = new Set(out.tagTypes.map((t) => t.id));
@@ -165,6 +176,12 @@ class Store {
       for (const [k, v] of Object.entries(d.images)) {
         const tags = Array.isArray(v && v.tags) ? [...new Set(v.tags.filter((id) => tagIds.has(id)))] : [];
         if (tags.length) out.images[path.resolve(k)] = { tags };
+      }
+    }
+    if (d.views && typeof d.views === 'object') {
+      for (const [k, v] of Object.entries(d.views)) {
+        const view = cleanView(v);
+        if (view) out.views[this.norm(k)] = view;
       }
     }
     return out;
@@ -558,10 +575,14 @@ class Store {
 
   renameImageKey(oldPath, newPath) {
     const k = this._keyFor(oldPath);
-    if (!k) return false;
+    if (!k) {
+      if (this._moveView(oldPath, newPath)) this.save();
+      return false;
+    }
     const entry = this.data.images[k];
     this._deleteKey(k);
     const nk = path.resolve(newPath);
+    this._moveView(oldPath, nk);
     const existing = this._keyFor(nk);
     if (existing) {
       // merge onto whatever was already recorded for the destination
@@ -598,11 +619,42 @@ class Store {
       this._index.set(this.norm(nk), nk);
       count++;
     }
+    for (const k of Object.keys(this.data.views)) {
+      if (!this.isInside(od, k)) continue;
+      const v = this.data.views[k];
+      delete this.data.views[k];
+      this.data.views[this.norm(remap(k))] = v;
+    }
     this.data.roots = this.data.roots.map((r) => (this.isInside(od, r) ? remap(r) : r));
     const lf = this.data.settings.lastFolder;
     if (lf && this.isInside(od, lf)) this.data.settings.lastFolder = remap(lf);
     this.save();
     return count;
+  }
+
+  // ---------- viewer zoom per image ----------
+  getImageView(p) {
+    const v = this.data.views[this.norm(p)];
+    return v ? { ...v } : null;
+  }
+
+  /** Save (or with null/invalid `v`, forget) the viewer zoom of an image. */
+  setImageView(p, v) {
+    const k = this.norm(p);
+    const view = cleanView(v);
+    if (view) this.data.views[k] = view;
+    else if (k in this.data.views) delete this.data.views[k];
+    else return;
+    this.save();
+  }
+
+  _moveView(from, to) {
+    const fk = this.norm(from);
+    const v = this.data.views[fk];
+    if (!v) return false;
+    delete this.data.views[fk];
+    this.data.views[this.norm(to)] = v;
+    return true;
   }
 
   /**
@@ -612,21 +664,30 @@ class Store {
   pruneMissing() {
     let removed = 0;
     const volumeOk = new Map();
-    for (const k of Object.keys(this.data.images)) {
+    const missing = (k) => {
       let ok = false;
       try { ok = this.existsSync(k); } catch { ok = true; }
-      if (ok) continue;
+      if (ok) return false;
       const vol = path.parse(k).root;
       if (!volumeOk.has(vol)) {
         let v = false;
         try { v = this.existsSync(vol); } catch { v = false; }
         volumeOk.set(vol, v);
       }
-      if (!volumeOk.get(vol)) continue;
+      return volumeOk.get(vol);
+    };
+    for (const k of Object.keys(this.data.images)) {
+      if (!missing(k)) continue;
       this._deleteKey(k);
       removed++;
     }
-    if (removed) this.save();
+    let views = 0;
+    for (const k of Object.keys(this.data.views)) {
+      if (!missing(k)) continue;
+      delete this.data.views[k];
+      views++;
+    }
+    if (removed || views) this.save();
     return removed;
   }
 }

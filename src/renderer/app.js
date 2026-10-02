@@ -114,6 +114,10 @@ function registerAllCommands() {
       if (sidebar.hasFocus()) sidebar.renameFocused();
       else if (pane() && pane().rename) pane().rename();
     },
+    'edit.delete': () => {
+      if (sidebar.hasFocus()) sidebar.deleteFocused();
+      else if (pane() && pane().deleteSelected) pane().deleteSelected();
+    },
     'edit.selectAll': () => { if (!sidebar.hasFocus() && pane() && pane().selectAll) pane().selectAll(); },
     'view.resetZoom': () => { if (pane()) pane().resetZoom(); },
     'search.quickOpen': () => openQuickOpen(wb),

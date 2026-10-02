@@ -1,7 +1,7 @@
 // File operations shared by galleries, tree and image tabs. Every successful
 // operation is broadcast so all views (galleries, tabs, Preview, tree,
 // inspector) can follow the new paths.
-import { api, state, emit, setGlobalSelection, samePath, remapUnder } from './state.js';
+import { api, state, emit, setGlobalSelection, samePath, pathUnder, remapUnder } from './state.js';
 import { toast, toastError, confirmDialog, promptDialog, validateName, basename, extname } from './ui.js';
 
 export const DRAG_TYPE = 'application/x-kunstmuseum-paths';
@@ -132,6 +132,46 @@ export async function moveInto(paths, dest, { quietUnchanged = false } = {}) {
     toastError(e, '移動できませんでした。');
     return null;
   }
+}
+
+/**
+ * 削除: move images and/or folders to the Recycle Bin after confirmation.
+ * `dirs` = which of `paths` are folders (for the confirmation wording).
+ * Returns the trashed entries ([] when cancelled or nothing was removed).
+ */
+export async function trashPaths(paths, { dirs = [] } = {}) {
+  const list = [...new Set(paths || [])];
+  if (!list.length) return [];
+  const what = list.length === 1 ? `「${basename(list[0])}」` : `${list.length}件の項目`;
+  const note = dirs.length ? '\nフォルダ内のすべてのファイルも一緒に移動されます。' : '';
+  const ok = await confirmDialog(`${what}をごみ箱に移動しますか？${note}`, { title: '削除', okLabel: 'ごみ箱に移動', danger: true });
+  if (!ok) return [];
+  let r;
+  try {
+    r = await api.trash(list);
+  } catch (e) {
+    toastError(e, '削除できませんでした。');
+    return [];
+  }
+  if (r.failed.length) {
+    toast(`${r.failed.length}件を削除できませんでした:\n${r.failed.slice(0, 3).map((x) => `${basename(x.path)}: ${x.message}`).join('\n')}`, 'error');
+  }
+  if (!r.trashed.length) return [];
+  toast(r.trashed.length === 1 ? `「${basename(r.trashed[0].path)}」をごみ箱に移動しました。` : `${r.trashed.length}件をごみ箱に移動しました。`, 'success');
+  const gone = isTrashed(r.trashed);
+  const s = state.selection;
+  if (s.paths.some(gone) || (s.origin && s.origin.list && s.origin.list.some((it) => gone(it.path)))) {
+    const left = s.paths.filter((p) => !gone(p));
+    const origin = s.origin && s.origin.list ? { ...s.origin, list: s.origin.list.filter((it) => !gone(it.path)) } : s.origin;
+    setGlobalSelection({ paths: left, primary: s.primary && !gone(s.primary) ? s.primary : null, origin });
+  }
+  emit('paths-trashed', r.trashed);
+  return r.trashed;
+}
+
+/** Predicate: is `p` one of the trashed entries or inside a trashed folder? */
+export function isTrashed(trashed) {
+  return (p) => trashed.some((t) => (t.isDir ? pathUnder(p, t.path) : samePath(p, t.path)));
 }
 
 /** Read dragged paths from a drop event (null when it is not our drag). */

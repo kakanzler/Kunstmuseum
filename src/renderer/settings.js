@@ -155,7 +155,7 @@ function hotkeysPanel() {
 
   return el('div', {},
     el('h3', {}, 'ホットキー（変更できます）'),
-    el('div', { class: 'note' }, 'Ctrl または Alt を含む組み合わせ（F1〜F12 は単独可）を割り当てられます。変更はすぐに反映され、保存されます。'),
+    el('div', { class: 'note' }, 'Ctrl または Alt を含む組み合わせ（F1〜F12 と Delete は単独可）を割り当てられます。変更はすぐに反映され、保存されます。'),
     msg,
     el('table', { class: 'kb-table' },
       el('thead', {}, el('tr', {}, el('th', {}, '操作'), el('th', {}, 'ショートカット'), el('th', {}, '変更'), el('th', {}, '既定に戻す'))),

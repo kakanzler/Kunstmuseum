@@ -7,6 +7,7 @@ import { keyLabel } from './commands.js';
 import { GalleryPane, defaultGalleryState } from './gallery.js';
 import { GraphPane } from './graph.js';
 import { PreviewPane, ImagePane } from './imagepanes.js';
+import { isTrashed } from './ops.js';
 
 const TAB_TYPE = 'application/x-km-tab';
 const ICONS = { gallery: '▦', graph: '◎', preview: '◫', image: '▣' };
@@ -41,6 +42,7 @@ class Workbench {
     on('paths-moved', ({ moved }) => this.remapImageTabs(byPath(moved)));
     on('folder-renamed', ({ from, to }) => this.remapImageTabs((p) => remapUnder(p, from, to)));
     on('roots-changed', () => this.dropTabsOutsideRoots());
+    on('paths-trashed', (trashed) => this.closeImageTabs(isTrashed(trashed)));
     on('keymap-changed', () => { if (this.model) this.render(); });
 
     let model = null;
@@ -479,6 +481,12 @@ class Workbench {
     if (changed) this.save();
   }
 
+  closeImageTabs(pred) {
+    const gone = this.model.allTabs().filter((t) => t.kind === 'image' && pred(t.path));
+    if (!gone.length) return;
+    for (const t of gone) this.model.closeTab(t.id);
+    this.commit();
+  }
   dropTabsOutsideRoots() {
     const inRoots = (p) => state.roots.some((r) => pathUnder(p, r.path));
     const gone = this.model.allTabs().filter((t) => t.kind === 'image' && !inRoots(t.path));
@@ -496,6 +504,13 @@ class Workbench {
   /** 全フォルダ（タグ付き画像）. */
   openTagged(opts = {}) {
     return this.openSource({ kind: 'tagged' }, opts);
+  }
+
+  /** The gallery pane openSource() would reuse (active, else most recent), or null. */
+  targetGallery() {
+    const at = this.model.activeTab();
+    const t = at && at.kind === 'gallery' ? at : this.model.mruGallery();
+    return t ? this.pane(t.id) : null;
   }
 
   openSource(src, { newTab = false } = {}) {

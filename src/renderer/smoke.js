@@ -88,8 +88,11 @@ async function phase1({ wb, sidebar, step, report }) {
   const preview = wb.pane(previewTabId);
   step('default layout: gallery | Preview');
 
-  await waitFor(() => g.grid.querySelectorAll('.tile').length >= expect, 20000, 'gallery tiles');
+  const expectDirect = Number(state.info.smokeExpectDirect || 1);
+  await waitFor(() => g.grid.querySelectorAll('.tile').length >= expectDirect, 20000, 'gallery tiles');
   report.tiles = g.grid.querySelectorAll('.tile').length;
+  assert(!g.includeSub && g.items.length === expectDirect, `folder shows only its direct images (${g.items.length} vs ${expectDirect})`);
+  assert(g.items.every((it) => samePath(dirname(it.path), g.source.path)), 'no subfolder images listed');
   await waitFor(() => {
     const imgs = [...g.grid.querySelectorAll('img')].filter((i) => i.getAttribute('src'));
     return imgs.length >= 1 && imgs.every((i) => i.complete);
@@ -145,7 +148,8 @@ async function phase1({ wb, sidebar, step, report }) {
     // rapid changes: stale loads must be ignored, the last pick wins
     g.selectIndex(1); g.selectIndex(2); g.selectIndex(3);
     const last = g.view[3];
-    await waitFor(() => preview.viewer.item && preview.viewer.item.path === last.path && preview.viewer.img.getAttribute('src') === fileUrl(last), 5000, 'last rapid pick shown');
+    await waitFor(() => preview.viewer.item && preview.viewer.item.path === last.path && (preview.viewer.img.getAttribute('src') === fileUrl(last)
+      || (last.ext === '.gif' && preview.viewer.img.getAttribute('src').startsWith('blob:'))), 5000, 'last rapid pick shown');
     await new Promise((res) => setTimeout(res, 900)); // a watcher event would arrive within ~500 ms
     sampling = false;
     mo.disconnect();
@@ -376,6 +380,9 @@ async function phase1({ wb, sidebar, step, report }) {
 
   // 19–22. settings size, Quick Open, bulk category edit, category hierarchy
   await featureChecks({ wb, g, galleryTabId, sidebar, tagId, expect, step, report });
+
+  // 23. wheel zoom memory, still GIFs, multi-folder gallery, Recycle Bin
+  await viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, report });
 
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
@@ -792,4 +799,76 @@ async function featureChecks({ wb, g, galleryTabId, sidebar, tagId, expect, step
   await sleep(400);
   report.hierarchy = { animal: animal.id, dog: dog.id, shiba: shiba.id };
   step('hierarchy: 動物 > 犬 > 柴犬; parent filter matches; tag manager tree; graph compound ' + cmp + ' (toggle ok)');
+}
+
+async function viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, report }) {
+  wb.activate(galleryTabId);
+  const root = state.roots[0].path;
+  if (!g.source || !samePath(g.source.path, root)) await g.setSource({ kind: 'folder', path: root });
+  await waitFor(() => g.items.length > 0, 5000, 'root gallery loaded');
+  const pv = wb.pane(wb.showSingletonRight('preview').id);
+  const v = pv.viewer;
+
+  // plain wheel zooms at the cursor; the zoom is saved per image and restored
+  const pick = g.items.find((it) => it.ext === '.bmp') || g.items[0];
+  const other = g.items.find((it) => it !== pick && it.ext !== '.gif');
+  g.selectPaths([pick.path], { emit: true });
+  await waitFor(() => v.item && v.item.path === pick.path && v.natW > 0 && pv.visible, 5000, 'preview shows the pick');
+  await pv.loading;
+  v.fit();
+  const fitScale = v.scale;
+  const r = v.stage.getBoundingClientRect();
+  for (let i = 0; i < 3; i++) {
+    v.stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
+  }
+  assert(!v.fitted && v.scale > fitScale * 1.4, `plain wheel zoomed (${fitScale} → ${v.scale})`);
+  const zoomed = v.scale;
+  await waitForAsync(async () => !!(await api.getImageView(pick.path)), 3000, 'zoom saved').catch((e) => {
+    throw new Error(`${e.message} ${JSON.stringify({ pending: !!v.pendingSave, fitted: v.fitted, item: v.item && v.item.path, pick: pick.path, scale: v.scale, view: v.currentView() })}`);
+  });
+  g.selectPaths([other.path], { emit: true });
+  await waitFor(() => v.item && v.item.path === other.path && v.natW > 0, 5000, 'other image');
+  await pv.loading;
+  g.selectPaths([pick.path], { emit: true });
+  await waitFor(() => v.item && v.item.path === pick.path && v.natW > 0, 5000, 'back to the pick');
+  await pv.loading;
+  assert(!v.fitted && Math.abs(v.scale - zoomed) < 1e-6, `saved zoom restored (${v.scale} vs ${zoomed})`);
+  v.fit();
+  await waitForAsync(async () => !(await api.getImageView(pick.path)), 3000, 'fit forgets the zoom');
+  step(`Preview: wheel zoom ${Math.round(fitScale * 100)}% → ${Math.round(zoomed * 100)}% saved and restored; fit forgets it`);
+
+  // GIF: still + orange frame in the gallery and Preview
+  const gif = g.items.find((it) => it.ext === '.gif');
+  const gifTile = g.tileByPath.get(gif.path);
+  assert(gifTile && gifTile.classList.contains('gif'), 'gif tile marked');
+  assert(getComputedStyle(gifTile.querySelector('img')).outlineStyle === 'solid', 'gif tile has an outline');
+  g.selectPaths([gif.path], { emit: true });
+  await waitFor(() => v.item && v.item.path === gif.path && v.natW > 0, 5000, 'preview shows the gif');
+  await pv.loading;
+  assert(v.img.classList.contains('gif') && v.img.src.startsWith('blob:'), 'preview shows a still frame of the gif');
+  step('GIF: still thumbnail and still Preview, both with an orange frame');
+
+  // multi-folder: Ctrl+click a subfolder adds its images; again removes them
+  const sub = (await api.listDir(root)).dirs[0].path;
+  const subCount = (await api.scan(sub, false)).length;
+  const direct = g.items.length;
+  await sidebar.expandFolder(root);
+  const subRow = () => document.querySelector(`.tree-row.folder[data-path="${CSS.escape(sub)}"]`);
+  assert(subRow(), 'subfolder row');
+  wb.activate(galleryTabId);
+  subRow().dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+  await waitFor(() => g.items.length === direct + subCount && g.source.paths && g.source.paths.length === 2, 5000, 'two folders listed');
+  await waitFor(() => subRow().classList.contains('current'), 2000, 'both folders marked current');
+  subRow().dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+  await waitFor(() => g.items.length === direct && !g.source.paths, 5000, 'back to one folder');
+  step(`multi-folder: Ctrl+click shows ${direct} + ${subCount} images, Ctrl+click again removes the folder`);
+
+  // Recycle Bin: a probe copy is trashed; roots are refused
+  const probe = await api.smokeCopyFixture(pick.path, 'km-smoke-added-trash' + pick.ext);
+  const tr = await api.trash([probe]);
+  assert(tr.trashed.length === 1 && !(await api.exists([probe]))[probe], 'probe moved to the Recycle Bin');
+  const refused = await api.trash([root]);
+  assert(!refused.trashed.length && refused.failed.length === 1, 'root folder refused');
+  step('削除: probe file sent to the Recycle Bin, registered root refused');
+  report.trash = { trashed: tr.trashed.length };
 }

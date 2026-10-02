@@ -1,17 +1,25 @@
 // Reusable image viewer component (used by the Preview tab and image tabs).
 // Every instance has its own zoom/pan state: fit (never above 100%),
-// Ctrl+wheel zoom at the cursor, drag to pan, Ctrl+0 / middle-click / 0 → fit,
+// wheel zoom at the cursor, drag to pan, Ctrl+0 / middle-click / 0 → fit,
 // 1 → 100%, double-click toggles 100% ⇔ fit, HUD with the zoom level.
+// With `persistView` the zoom of each image is remembered (library.json) and
+// restored when it is shown again; fit forgets it. With `stillGif` a GIF is
+// shown as its first frame with an orange frame instead of animating.
 import { el, fileUrl } from './ui.js';
+import { api } from './state.js';
 import { keyLabel } from './commands.js';
 
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
 const STEP = 1.15;
+const SAVE_DELAY = 400;
+
+const isGifItem = (item) => (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.gif';
 
 export class ImageViewer {
   /**
-   * @param {{onNavigate?:(delta:number)=>void, onRename?:()=>void, emptyText?:string}} opts
+   * @param {{onNavigate?:(delta:number)=>void, onRename?:()=>void, emptyText?:string,
+   *          persistView?:boolean, stillGif?:boolean}} opts
    */
   constructor(opts = {}) {
     this.opts = opts;
@@ -25,6 +33,8 @@ export class ImageViewer {
     this.fitted = true;
     this.token = 0;
     this.swaps = 0;
+    this.blobUrl = null;
+    this.pendingSave = null; // {path, timer}
 
     this.nameEl = el('div', { class: 'iv-name' });
     this.posEl = el('div', { class: 'muted small iv-pos' });
@@ -49,16 +59,9 @@ export class ImageViewer {
   _bind() {
     this.stage.addEventListener('wheel', (e) => {
       e.preventDefault();
-      if (!this.natW) return;
-      if (e.ctrlKey) {
-        const r = this.stage.getBoundingClientRect();
-        this.zoomAt(this.scale * (e.deltaY < 0 ? STEP : 1 / STEP), e.clientX - r.left, e.clientY - r.top);
-      } else {
-        this.tx -= e.shiftKey ? e.deltaY : e.deltaX;
-        this.ty -= e.shiftKey ? 0 : e.deltaY;
-        this._clamp();
-        this._apply();
-      }
+      if (!this.natW || !e.deltaY) return;
+      const r = this.stage.getBoundingClientRect();
+      this.zoomAt(this.scale * (e.deltaY < 0 ? STEP : 1 / STEP), e.clientX - r.left, e.clientY - r.top);
     }, { passive: false });
 
     this.stage.addEventListener('mousedown', (e) => {
@@ -81,6 +84,7 @@ export class ImageViewer {
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
         this.stage.classList.remove('panning');
+        if (this.tx !== start.tx || this.ty !== start.ty) this._saveLater();
       };
       window.addEventListener('mousemove', move);
       window.addEventListener('mouseup', up);
@@ -95,7 +99,7 @@ export class ImageViewer {
 
     this.ro = new ResizeObserver(() => {
       if (!this.natW || !this.stage.clientWidth) return;
-      if (this.fitted) this.fit();
+      if (this.fitted) this._fit();
       else { this._clamp(); this._apply(); }
     });
     this.ro.observe(this.stage);
@@ -104,14 +108,23 @@ export class ImageViewer {
   dispose() {
     this.ro.disconnect();
     this.token++;
+    this._flushSave();
+    this._setBlob(null);
+  }
+
+  _setBlob(url) {
+    if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
+    this.blobUrl = url;
   }
 
   /** Show an empty/message state. */
   clear(text) {
     this.token++;
+    this._flushSave();
     this.item = null;
     this.natW = 0;
     this.img.removeAttribute('src');
+    this._setBlob(null);
     this.img.style.visibility = 'hidden';
     this.nameEl.textContent = '';
     this.posEl.textContent = '';
@@ -133,15 +146,19 @@ export class ImageViewer {
     this.nameEl.textContent = item.name;
     this.nameEl.title = item.path;
     const same = this.item && this.item.path === item.path && (this.item.mtime || 0) === (item.mtime || 0) && this.natW;
+    if (!same) this._flushSave();
     this.item = item;
     if (same) return Promise.resolve();
     const token = ++this.token;
     const isSvg = (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.svg';
+    const still = !!this.opts.stillGif && isGifItem(item);
     const url = fileUrl(item);
     const probe = new Image();
     probe.decoding = 'async';
+    if (still) probe.crossOrigin = 'anonymous'; // readable by the canvas (stillFrame)
     probe.src = url;
-    return probe.decode().then(() => {
+    const view = this.opts.persistView ? api.getImageView(item.path).catch(() => null) : Promise.resolve(null);
+    return Promise.all([probe.decode(), view]).then(async ([, saved]) => {
       if (token !== this.token) return;
       let w = probe.naturalWidth || 0;
       let h = probe.naturalHeight || 0;
@@ -150,14 +167,24 @@ export class ImageViewer {
         w = Math.round(r.width * 0.8) || 800;
         h = Math.round(r.height * 0.8) || 600;
       }
+      let src = url; // same URL → served decoded from the memory cache
+      let blob = null;
+      if (still) {
+        blob = await stillFrame(probe, w, h);
+        if (token !== this.token) { if (blob) URL.revokeObjectURL(blob); return; }
+        if (blob) src = blob;
+      }
       this.natW = w;
       this.natH = h;
       this.isSvg = isSvg;
-      this.img.src = url; // same URL → served decoded from the memory cache
+      this.img.src = src;
+      this._setBlob(blob);
+      this.img.classList.toggle('gif', still);
       this.swaps++;
       this.img.style.visibility = 'visible';
       this.msg.classList.add('hidden');
-      this.fit();
+      if (saved) this._applyView(saved);
+      else this._fit();
     }, () => {
       if (token !== this.token) return;
       this.natW = 0;
@@ -186,7 +213,14 @@ export class ImageViewer {
     return { w: this.stage.clientWidth, h: this.stage.clientHeight };
   }
 
+  /** User fit (全体 / 0 / middle-click): also forgets the saved zoom. */
   fit() {
+    if (!this.natW) return;
+    this._fit();
+    this._forgetView();
+  }
+
+  _fit() {
     if (!this.natW) return;
     const { w, h } = this._viewport();
     this.scale = w && h ? Math.min(1, w / this.natW, h / this.natH) : 1;
@@ -215,6 +249,50 @@ export class ImageViewer {
     this.fitted = false;
     this._clamp();
     this._apply();
+    this._saveLater();
+  }
+
+  // ---------- saved zoom (persistView) ----------
+  /** Current view: scale + viewport centre as a 0–1 fraction of the image. */
+  currentView() {
+    const { w, h } = this._viewport();
+    const iw = this.natW * this.scale;
+    const ih = this.natH * this.scale;
+    const frac = (v) => Math.max(0, Math.min(1, v));
+    return { scale: this.scale, cx: frac((w / 2 - this.tx) / iw), cy: frac((h / 2 - this.ty) / ih) };
+  }
+
+  _applyView(v) {
+    const { w, h } = this._viewport();
+    this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale));
+    this.tx = w / 2 - v.cx * this.natW * this.scale;
+    this.ty = h / 2 - v.cy * this.natH * this.scale;
+    this.fitted = false;
+    this._clamp();
+    this._apply();
+  }
+
+  _saveLater() {
+    if (!this.opts.persistView || !this.item || !this.natW) return;
+    const path = this.item.path;
+    if (this.pendingSave) clearTimeout(this.pendingSave.timer);
+    this.pendingSave = { path, timer: setTimeout(() => this._flushSave(), SAVE_DELAY) };
+  }
+
+  /** Write a pending zoom now (before switching images or disposing). */
+  _flushSave() {
+    const p = this.pendingSave;
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pendingSave = null;
+    if (!this.item || this.item.path !== p.path || !this.natW || this.fitted) return;
+    api.setImageView(p.path, this.currentView()).catch(() => {});
+  }
+
+  _forgetView() {
+    if (!this.opts.persistView || !this.item) return;
+    if (this.pendingSave) { clearTimeout(this.pendingSave.timer); this.pendingSave = null; }
+    api.setImageView(this.item.path, null).catch(() => {});
   }
 
   zoomPercent() {
@@ -246,6 +324,7 @@ export class ImageViewer {
       s.height = `${this.natH}px`;
       s.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
     }
+    s.setProperty('--iv-s', String(this.isSvg ? 1 : this.scale));
     this.stage.classList.toggle('pannable', this._canPan());
     this.hud.textContent = `${this.zoomPercent()}%`;
   }
@@ -266,5 +345,24 @@ export class ImageViewer {
   /** 名前の変更 command (bound in the keymap). */
   rename() {
     if (this.opts.onRename && this.item) this.opts.onRename();
+  }
+}
+
+/** First frame of a decoded (animated) image as an object URL, or null. */
+async function stillFrame(img, w, h) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    const probe = new Image();
+    probe.src = url;
+    await probe.decode().catch(() => {});
+    return url;
+  } catch {
+    return null;
   }
 }

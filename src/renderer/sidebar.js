@@ -1,6 +1,7 @@
 // Sidebar tree: registered roots → lazy subfolders and image files.
-// Folder click opens it in a gallery; file click drives the global selection
-// (Preview + inspector); drag files onto folders/galleries to move them.
+// Folder click opens it in a gallery (Ctrl+click adds/removes folders to show
+// several at once); file click drives the global selection (Preview +
+// inspector); drag files onto folders/galleries to move them.
 import {
   api, state, on, emit, saveSettings, normKey, keyUnder, samePath, remapUnder, galleries,
   setGlobalSelection, registerItemLookup,
@@ -8,8 +9,10 @@ import {
 import { el, toast, toastError, showContextMenu, confirmDialog, basename, dirname, extname } from './ui.js';
 import {
   DRAG_TYPE, draggedPaths, moveInto, startPathsDrag, checkFileName, renameFileTo, renameFolderTo, splitName,
+  trashPaths, isTrashed,
 } from './ops.js';
 import { openBulkEditor } from './bulk.js';
+import { sourceDirs, folderSource } from './gallery.js';
 
 const PAGE = 500;
 const $ = (id) => document.getElementById(id);
@@ -94,6 +97,7 @@ export function initSidebar(context) {
   on('paths-renamed', (renames) => afterPathsChanged(renames));
   on('paths-moved', ({ moved, dest }) => afterPathsChanged(moved, [dest]));
   on('folder-renamed', ({ from, to }) => afterFolderRenamed(from, to));
+  on('paths-trashed', (trashed) => afterTrashed(trashed));
   on('roots-changed', () => renderTree());
   on('layout-changed', () => paint());
   on('active-pane-changed', () => paint());
@@ -162,6 +166,17 @@ async function afterPathsChanged(pairs, extraDirs = []) {
   if (anchor && map.has(anchor)) anchor = map.get(anchor);
   const dirs = [...pairs.flatMap((x) => [dirname(x.from), dirname(x.to)]), ...extraDirs];
   await reloadDirs(dirs);
+}
+
+async function afterTrashed(trashed) {
+  const gone = isTrashed(trashed);
+  sel = new Set([...sel].filter((p) => !gone(p)));
+  if (focusPath && gone(focusPath)) focusPath = null;
+  if (anchor && gone(anchor)) anchor = null;
+  for (const k of [...expanded]) if (gone(k)) expanded.delete(k);
+  for (const [k, c] of [...cache]) if (gone(c.path)) cache.delete(k);
+  await reloadDirs(trashed.map((t) => dirname(t.path)));
+  renderTree();
 }
 
 async function afterFolderRenamed(from, to) {
@@ -315,10 +330,11 @@ function paint() {
   if (!tree) return;
   const s = ctx && ctx.model ? ctx.activePane() : null;
   const cur = s && s.kind === 'gallery' && s.source ? s.source : null;
+  const curDirs = sourceDirs(cur);
   for (const [p, e] of rowEls) {
     const type = e.dataset.type;
     e.classList.toggle('selected', type === 'file' ? sel.has(p) : false);
-    e.classList.toggle('current', type === 'folder' && !!cur && cur.kind === 'folder' && samePath(cur.path, p));
+    e.classList.toggle('current', type === 'folder' && curDirs.some((d) => samePath(d, p)));
     e.classList.toggle('focused', focusPath != null && p === focusPath);
   }
   const special = tree.querySelector('.tree-row.special');
@@ -407,7 +423,22 @@ function onClick(e) {
   focusPath = path;
   if (e.target.closest('.tree-caret')) { toggle(path, row.dataset.exists !== '0'); return; }
   if (row.dataset.exists === '0') { toast('フォルダが見つかりません。移動または削除された可能性があります。', 'error'); return; }
-  ctx.openFolder(path, { newTab: e.ctrlKey || e.metaKey }).then(() => paint());
+  if (e.ctrlKey || e.metaKey) { toggleFolderInGallery(path); return; }
+  ctx.openFolder(path).then(() => paint());
+}
+
+/** Ctrl+click: add the folder to (or remove it from) the gallery's folder set. */
+function toggleFolderInGallery(path) {
+  const g = ctx.targetGallery();
+  const dirs = g ? [...sourceDirs(g.source)] : [];
+  const i = dirs.findIndex((d) => samePath(d, path));
+  if (i >= 0) {
+    if (dirs.length === 1) return; // keep at least one folder
+    dirs.splice(i, 1);
+  } else {
+    dirs.push(path);
+  }
+  ctx.openSource(folderSource(dirs)).then(() => paint());
 }
 
 function onDblClick(e) {
@@ -434,6 +465,7 @@ function onContextMenu(e) {
     showContextMenu(e.clientX, e.clientY, [
       { label: '名前の変更', disabled: paths.length > 1, action: () => startRename(path) },
       { label: '新しいタブで開く', action: () => ctx.openImage(path, { list: filesOf(row.dataset.parent) }) },
+      { label: paths.length > 1 ? `削除（ごみ箱へ・${paths.length}件）` : '削除（ごみ箱へ）', action: () => trashPaths(paths) },
       { separator: true },
       { label: 'エクスプローラーで表示', action: () => api.showItem(path) },
       {
@@ -451,6 +483,7 @@ function onContextMenu(e) {
     items.push({ label: 'カテゴリを一括編集…', action: () => openBulkEditor({ folder: path, includeSub: true }) });
     items.push({ label: '名前の変更', action: () => startRename(path) });
     items.push({ label: 'エクスプローラーで表示', action: () => api.openPath(path) });
+    if (row.dataset.root !== '1') items.push({ label: '削除（ごみ箱へ）', action: () => trashPaths([path], { dirs: [path] }) });
   }
   if (row.dataset.root === '1') {
     if (items.length) items.push({ separator: true });
@@ -632,6 +665,16 @@ export function focusedFolder() {
 export function renameFocused() {
   const cur = rows.find((r) => r.path === focusPath);
   if (cur && (cur.type === 'file' || cur.type === 'folder') && cur.exists !== false) startRename(cur.path);
+}
+
+/** 削除 command while the tree has focus: selected files, else the focused folder. */
+export function deleteFocused() {
+  const cur = rows.find((r) => r.path === focusPath);
+  if (cur && cur.type === 'file' && sel.size) { trashPaths([...sel]); return; }
+  if (cur && cur.type === 'folder' && cur.exists !== false) {
+    if (cur.isRoot) { toast('登録フォルダは削除できません。「一覧から外す」を使ってください。', 'info'); return; }
+    trashPaths([cur.path], { dirs: [cur.path] });
+  }
 }
 
 /** 一般 › サイドバーにファイルを表示 */

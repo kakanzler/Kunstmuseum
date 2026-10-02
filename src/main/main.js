@@ -28,7 +28,8 @@ if (SMOKE) {
 }
 
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'kmimg', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  // corsEnabled: still GIFs are redrawn on a canvas, which needs an untainted (CORS) load
+  { scheme: 'kmimg', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 let store = null;
@@ -126,7 +127,8 @@ async function serveFile(p) {
 
 async function serveThumb(p) {
   const ext = fsops.extOf(p);
-  if (fsops.PASSTHROUGH_EXTS.has(ext)) return serveFile(p);
+  // GIF thumbnails are rendered still (shell thumbnail = first frame)
+  if (ext !== '.gif' && fsops.PASSTHROUGH_EXTS.has(ext)) return serveFile(p);
   let st;
   try {
     st = await fsp.stat(p);
@@ -271,6 +273,7 @@ function registerIpc() {
     platform: process.platform,
     smoke: SMOKE,
     smokeExpect: SMOKE ? Number(process.env.KM_SMOKE_EXPECT || 1) : 0,
+    smokeExpectDirect: SMOKE ? Number(process.env.KM_SMOKE_EXPECT_DIRECT || 1) : 0,
     smokePhase: SMOKE ? Number(process.env.KM_SMOKE_PHASE || 1) : 0,
     version: app.getVersion(),
     exts: fsops.SUPPORTED_EXTS,
@@ -379,6 +382,37 @@ function registerIpc() {
     return r;
   });
 
+  // 削除: to the Recycle Bin only (recoverable). Folders that are, or contain,
+  // a registered root are refused.
+  handle('fs:trash', async (paths) => {
+    const list = (Array.isArray(paths) ? paths : []).map((p) => assertInRoots(p, '削除対象'));
+    const trashed = [];
+    const failed = [];
+    for (const p of list) {
+      let st;
+      try {
+        st = await fsp.stat(p);
+      } catch (e) {
+        failed.push({ path: p, message: e.message });
+        continue;
+      }
+      const isDir = st.isDirectory();
+      if (!isDir && !fsops.isSupported(p)) { failed.push({ path: p, message: '対応する画像ではありません。' }); continue; }
+      if (isDir && store.getRoots().some((r) => store.isInside(p, r))) {
+        failed.push({ path: p, message: '登録フォルダは削除できません（「一覧から外す」を使ってください）。' });
+        continue;
+      }
+      try {
+        await shell.trashItem(p);
+        fileIndex.removePath(p);
+        trashed.push({ path: p, isDir });
+      } catch (e) {
+        failed.push({ path: p, message: e.message });
+      }
+    }
+    return { trashed, failed };
+  });
+
   handle('shell:showItem', (p) => { shell.showItemInFolder(assertInRoots(p)); return true; });
   handle('shell:openPath', async (p) => {
     const err = await shell.openPath(assertInRoots(p));
@@ -389,6 +423,8 @@ function registerIpc() {
 
   // tags
   handle('lib:get', () => libSnapshot());
+  handle('images:getView', (p) => store.getImageView(assertInRoots(p, 'ファイル')));
+  handle('images:setView', (p, v) => { store.setImageView(assertInRoots(p, 'ファイル'), v); return true; });
   handle('lib:addType', (t) => { store.addTagType(t || {}); return libSnapshot(); });
   handle('lib:updateType', (id, t) => { store.updateTagType(id, t || {}); return libSnapshot(); });
   handle('lib:deleteType', (id, reassignTo) => { store.deleteTagType(id, reassignTo); return libSnapshot(); });
@@ -660,7 +696,7 @@ if (!gotLock) {
     if (SMOKE && process.env.KM_SMOKE_DIR && process.env.KM_SMOKE_PHASE !== '2') {
       const d = path.resolve(process.env.KM_SMOKE_DIR);
       store.addRoot(d);
-      store.setSettings({ lastFolder: d, includeSubfolders: true });
+      store.setSettings({ lastFolder: d });
     }
     registerProtocol();
     registerIpc();

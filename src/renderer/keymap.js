@@ -22,6 +22,7 @@ export const COMMANDS = [
   { id: 'group.focus3', label: 'グループ3へ移動', category: 'タブ', default: 'Ctrl+3' },
   { id: 'group.focus4', label: 'グループ4へ移動', category: 'タブ', default: 'Ctrl+4' },
   { id: 'edit.rename', label: '名前の変更', category: '編集', default: 'F2' },
+  { id: 'edit.delete', label: '削除（ごみ箱へ）', category: '編集', default: 'Delete' },
   { id: 'edit.selectAll', label: 'すべて選択', category: '編集', default: 'Ctrl+A' },
   { id: 'view.resetZoom', label: '表示サイズを戻す', category: '表示', default: 'Ctrl+0' },
   { id: 'view.refresh', label: '更新', category: '表示', default: 'F5' },
@@ -147,7 +148,7 @@ export function validateCombo(combo) {
   if (['Enter', 'Space', 'Up', 'Down', 'Left', 'Right', 'Tab'].includes(p.key) && !p.ctrl) {
     return `${DISPLAY[p.key] || p.key} は Ctrl と組み合わせる必要があります。`;
   }
-  if (!p.ctrl && !p.alt && !isFKey(p.key)) return 'Ctrl または Alt を含めてください（F1〜F12 は単独で使用できます）。';
+  if (!p.ctrl && !p.alt && !isFKey(p.key) && p.key !== 'Delete') return 'Ctrl または Alt を含めてください（F1〜F12 と Delete は単独で使用できます）。';
   if (/^F(1[3-9]|2[0-4])$/.test(p.key) && !p.ctrl && !p.alt) return 'Ctrl または Alt を含めてください。';
   return null;
 }

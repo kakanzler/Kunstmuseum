@@ -3,6 +3,7 @@
 // Safety invariant: nothing in this module ever overwrites or deletes a user
 // file. Renames/moves refuse when the target exists; the only unlink is of a
 // move source after its content has been verified at the destination.
+// (削除 sends files to the Recycle Bin via shell.trashItem in main.js.)
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');

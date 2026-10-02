@@ -9,6 +9,7 @@ import { tagChip, fillTagSelect } from './tags.js';
 import { filterMatcher } from './tag-tree.js';
 import {
   checkFileName, renameFileTo, splitName, moveInto, draggedPaths, dragSource, startPathsDrag, DRAG_TYPE,
+  trashPaths, isTrashed,
 } from './ops.js';
 
 export const DEFAULT_THUMB = 160;
@@ -16,12 +17,37 @@ const MIN_THUMB = 80;
 const MAX_THUMB = 400;
 const MAX_SAVED_SELECTION = 2000;
 
+/**
+ * Folders shown by a folder source: {kind:'folder', path, paths?}. `paths`
+ * (Ctrl+click in the sidebar) lists several folders; `path` is the first.
+ */
+export function sourceDirs(src) {
+  if (!src || src.kind !== 'folder') return [];
+  return Array.isArray(src.paths) && src.paths.length ? src.paths : [src.path];
+}
+
+/** Normalised folder source for a list of folders (null when empty). */
+export function folderSource(dirs) {
+  const out = [];
+  for (const d of dirs) if (d && !out.some((x) => samePath(x, d))) out.push(d);
+  if (!out.length) return null;
+  return out.length === 1 ? { kind: 'folder', path: out[0] } : { kind: 'folder', path: out[0], paths: out };
+}
+
+function sameSource(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'tagged') return true;
+  const x = sourceDirs(a);
+  const y = sourceDirs(b);
+  return x.length === y.length && x.every((d) => y.some((e) => samePath(d, e)));
+}
+
 /** Initial state for a new gallery tab (inherits the last used view options). */
 export function defaultGalleryState(source = null) {
   const s = state.settings;
   return {
     source,
-    includeSub: s.includeSubfolders !== false,
+    includeSub: false, // a folder shows only its direct images unless ticked
     search: '',
     sortKey: s.sortKey || 'name',
     sortDir: s.sortDir === 'desc' ? 'desc' : 'asc',
@@ -40,8 +66,9 @@ export class GalleryPane {
     this.tabId = tab.id;
     this.id = tab.id;
     const st = { ...defaultGalleryState(), ...(tab.state || {}) };
-    this.source = st.source && (st.source.kind === 'tagged' || (st.source.kind === 'folder' && st.source.path)) ? st.source : null;
-    this.includeSub = st.includeSub !== false;
+    this.source = st.source && st.source.kind === 'tagged' ? st.source
+      : st.source && st.source.kind === 'folder' && st.source.path ? folderSource(sourceDirs(st.source)) : null;
+    this.includeSub = false; // always starts at direct images only (not restored)
     this.search = st.search || '';
     this.sortKey = ['name', 'mtime', 'size'].includes(st.sortKey) ? st.sortKey : 'name';
     this.sortDir = st.sortDir === 'desc' ? 'desc' : 'asc';
@@ -73,6 +100,7 @@ export class GalleryPane {
       on('paths-moved', ({ moved, dest }) => this.onMoved(moved, dest)),
       on('folder-renamed', ({ from, to }) => this.onFolderRenamed(from, to)),
       on('roots-changed', () => this.onRootsChanged()),
+      on('paths-trashed', (trashed) => this.onTrashed(trashed)),
     ];
     this.setThumbSize(this.thumbSize, false);
     this.renderTagFilter();
@@ -165,7 +193,6 @@ export class GalleryPane {
     });
     this.includeEl.addEventListener('change', () => {
       this.includeSub = this.includeEl.checked;
-      saveSettings({ includeSubfolders: this.includeSub });
       this.reload();
       this.changed();
     });
@@ -208,7 +235,7 @@ export class GalleryPane {
     // drop target: move dragged images into this gallery's folder
     const wrap = this.gridWrap;
     const accepts = (e) => e.dataTransfer.types.includes(DRAG_TYPE)
-      && this.source && this.source.kind === 'folder'
+      && sourceDirs(this.source).length === 1
       && dragSource(e) !== String(this.id).toLowerCase();
     wrap.addEventListener('dragover', (e) => {
       if (!accepts(e)) return;
@@ -236,7 +263,11 @@ export class GalleryPane {
   title() {
     if (!this.source) return 'ギャラリー';
     if (this.source.kind === 'tagged') return '全フォルダ（タグ付き画像）';
-    return basename(this.source.path) || this.source.path;
+    const dirs = sourceDirs(this.source);
+    const name = (d) => basename(d) || d;
+    if (dirs.length === 1) return name(dirs[0]);
+    if (dirs.length === 2) return `${name(dirs[0])} + ${name(dirs[1])}`;
+    return `${name(dirs[0])} ほか${dirs.length - 1}件`;
   }
   get italic() {
     return false;
@@ -296,10 +327,13 @@ export class GalleryPane {
 
   // ---------- loading ----------
   setSource(source) {
-    const same = (this.source && source && this.source.kind === source.kind
-      && (source.kind === 'tagged' || samePath(this.source.path, source.path)));
+    if (source && source.kind === 'folder') source = folderSource(sourceDirs(source));
+    const same = sameSource(this.source, source);
     this.source = source;
     if (!same) {
+      // picking another folder (set) always starts with its direct images only
+      this.includeSub = false;
+      this.includeEl.checked = false;
       this.selection = new Set();
       this.focus = null;
       this.anchor = null;
@@ -321,8 +355,16 @@ export class GalleryPane {
     if (this.source) {
       if (!quiet) this._setEmpty('読み込み中…');
       try {
-        if (this.source.kind === 'folder') items = await api.scan(this.source.path, this.includeSub);
-        else items = await api.listTagged();
+        if (this.source.kind === 'folder') {
+          const lists = await Promise.all(sourceDirs(this.source).map((d) => api.scan(d, this.includeSub)));
+          const seen = new Set();
+          items = lists.flat().filter((it) => {
+            const k = normKey(it.path);
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+        } else items = await api.listTagged();
       } catch (e) {
         if (token !== this.loadToken) return;
         if (!quiet) toastError(e, 'フォルダを読み込めませんでした。');
@@ -337,7 +379,7 @@ export class GalleryPane {
     if (this.anchor && !this.itemsByPath.has(this.anchor)) this.anchor = null;
     this.loaded = true;
     this.titleEl.textContent = this.title();
-    this.titleEl.title = this.source && this.source.kind === 'folder' ? this.source.path : '';
+    this.titleEl.title = sourceDirs(this.source).join('\n');
     this.applyView({ scrollTop: scroll });
     // keep the global selection in step when it came from this gallery
     const o = state.selection.origin;
@@ -345,10 +387,11 @@ export class GalleryPane {
   }
 
   isShowingDir(dir) {
-    if (!this.source || this.source.kind !== 'folder') return false;
     const k = normKey(dir);
-    const src = normKey(this.source.path);
-    return this.includeSub ? keyUnder(k, src) : k === src;
+    return sourceDirs(this.source).some((d) => {
+      const src = normKey(d);
+      return this.includeSub ? keyUnder(k, src) : k === src;
+    });
   }
 
   onFsChanged(dirs) {
@@ -393,9 +436,9 @@ export class GalleryPane {
   onFolderRenamed(from, to) {
     if (!this.source) return;
     if (this.source.kind === 'folder') {
-      const n = remapUnder(this.source.path, from, to);
-      if (n) {
-        this.source = { kind: 'folder', path: n };
+      const dirs = sourceDirs(this.source);
+      if (dirs.some((d) => pathUnder(d, from))) {
+        this.source = folderSource(dirs.map((d) => remapUnder(d, from, to) || d));
         this.selection = new Set([...this.selection].map((p) => remapUnder(p, from, to) || p));
         if (this.focus) this.focus = remapUnder(this.focus, from, to) || this.focus;
         if (this.anchor) this.anchor = remapUnder(this.anchor, from, to) || this.anchor;
@@ -404,15 +447,35 @@ export class GalleryPane {
         this.reload();
         return;
       }
-      if (this.includeSub && pathUnder(from, this.source.path)) { this.reload(); return; }
+      if (this.includeSub && dirs.some((d) => pathUnder(from, d))) { this.reload(); return; }
     }
     if (this.source.kind === 'tagged') this.reload();
   }
 
   onRootsChanged() {
-    if (this.source && this.source.kind === 'folder' && !state.roots.some((r) => pathUnder(this.source.path, r.path))) {
-      this.setSource(null);
+    if (!this.source || this.source.kind !== 'folder') return;
+    const dirs = sourceDirs(this.source);
+    const keep = dirs.filter((d) => state.roots.some((r) => pathUnder(d, r.path)));
+    if (keep.length !== dirs.length) this.setSource(folderSource(keep));
+  }
+
+  /** Images/folders sent to the Recycle Bin: drop them, then re-read. */
+  onTrashed(trashed) {
+    if (!this.source) return;
+    const gone = isTrashed(trashed);
+    this.selection = new Set([...this.selection].filter((p) => !gone(p)));
+    if (this.source.kind === 'folder') {
+      const dirs = sourceDirs(this.source);
+      const keep = dirs.filter((d) => !gone(d));
+      if (keep.length !== dirs.length) { this.setSource(folderSource(keep)); return; }
     }
+    if (this.items.some((it) => gone(it.path))) this.reload();
+  }
+
+  /** 削除 command / context menu: the selected images. */
+  deleteSelected() {
+    const paths = this.selectedPaths();
+    if (paths.length) trashPaths(paths);
   }
 
   /** Re-read tag ids for all loaded items (after merge/delete in タグ管理). */
@@ -505,6 +568,11 @@ export class GalleryPane {
     img.decoding = 'async';
     img.dataset.src = thumbUrl(it);
     img.addEventListener('error', () => img.classList.add('broken'), { once: true });
+    const gif = (it.ext || '').toLowerCase() === '.gif';
+    if (gif) {
+      img.crossOrigin = 'anonymous'; // readable by the canvas (freezeImage)
+      img.addEventListener('load', () => freezeImage(img), { once: true });
+    }
     const thumb = document.createElement('div');
     thumb.className = 'thumb';
     thumb.append(img);
@@ -513,7 +581,7 @@ export class GalleryPane {
     cap.textContent = it.name;
     cap.title = it.name;
     const tile = document.createElement('div');
-    tile.className = 'tile';
+    tile.className = gif ? 'tile gif' : 'tile';
     tile.draggable = true;
     tile.append(thumb, cap);
     tile._key = `${it.path}|${it.mtime}|${it.name}`;
@@ -659,6 +727,7 @@ export class GalleryPane {
     showContextMenu(e.clientX, e.clientY, [
       { label: '開く', action: () => this.ctx.openImage(it.path, { fromPane: this }) },
       { label: '名前の変更', disabled: multi, action: () => this.startRename(it) },
+      { label: multi ? `削除（ごみ箱へ・${paths.length}件）` : '削除（ごみ箱へ）', action: () => trashPaths(paths) },
       { separator: true },
       { label: 'エクスプローラーで表示', action: () => api.showItem(it.path) },
       {
@@ -769,5 +838,25 @@ export class GalleryPane {
     const it = this.view[i];
     if (!this.selection.has(it.path)) this.selectIndex(i);
     startPathsDrag(e, this.selectedPaths(), this.id);
+  }
+}
+
+/**
+ * GIF thumbnails never animate: main serves a still shell thumbnail, and if
+ * it fell back to the original file, the first frame is redrawn as a PNG.
+ */
+function freezeImage(img) {
+  try {
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    if (!w || !h) return;
+    const k = Math.min(1, 320 / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * k));
+    c.height = Math.max(1, Math.round(h * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    img.src = c.toDataURL('image/png');
+  } catch {
+    /* keep the served image */
   }
 }

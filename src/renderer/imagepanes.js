@@ -2,7 +2,7 @@
 import { api, state, on, galleries, lookupItem, navListFor, setGlobalSelection, samePath } from './state.js';
 import { el, basename, dirname, extname, toastError } from './ui.js';
 import { ImageViewer } from './viewer.js';
-import { renameFileWithDialog } from './ops.js';
+import { renameFileWithDialog, trashPaths } from './ops.js';
 
 function itemFor(p) {
   return lookupItem(p) || { path: p, name: basename(p), ext: extname(basename(p)) };
@@ -23,6 +23,8 @@ export class PreviewPane {
       onNavigate: (d) => this.navigate(d),
       onRename: () => { if (state.selection.primary) renameFileWithDialog(state.selection.primary); },
       emptyText: '画像を選択すると、ここにプレビューが表示されます。',
+      persistView: true,
+      stillGif: true,
     });
     this.viewer.clear();
     this.el = el('div', { class: 'pane image-pane preview-pane' }, this.viewer.el);
@@ -80,6 +82,10 @@ export class PreviewPane {
   rename() {
     this.viewer.rename();
   }
+  /** 削除 command: the previewed image. */
+  deleteSelected() {
+    if (state.selection.primary) trashPaths([state.selection.primary]);
+  }
   resetZoom() {
     this.viewer.fit();
   }
@@ -103,6 +109,7 @@ export class ImagePane {
     this.viewer = new ImageViewer({
       onNavigate: (d) => this.navigate(d),
       onRename: () => renameFileWithDialog(this.path),
+      persistView: true,
     });
     this.el = el('div', { class: 'pane image-pane' }, this.viewer.el);
     this.loading = this.load();
@@ -172,6 +179,10 @@ export class ImagePane {
   }
   rename() {
     this.viewer.rename();
+  }
+  /** 削除 command: this tab's image (the tab closes on paths-trashed). */
+  deleteSelected() {
+    trashPaths([this.path]);
   }
   resetZoom() {
     this.viewer.fit();

@@ -192,3 +192,42 @@ test('corrupt library is backed up and replaced by defaults', () => {
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), '{not json');
 });
+
+test('image views: set/get/clear, sanitized on load', async () => {
+  const s = mk();
+  const a = path.join(dir, 'a.png');
+  assert.equal(s.getImageView(a), null);
+  s.setImageView(a, { scale: 2.5, cx: 0.25, cy: 0.75 });
+  assert.deepEqual(s.getImageView(a), { scale: 2.5, cx: 0.25, cy: 0.75 });
+  s.setImageView(a, { scale: 999, cx: -1, cy: 2 });
+  assert.deepEqual(s.getImageView(a), { scale: 20, cx: 0, cy: 1 }, 'clamped');
+  s.setImageView(a, { scale: NaN, cx: 0, cy: 0 });
+  assert.equal(s.getImageView(a), null, 'invalid view forgets the entry');
+  s.setImageView(a, { scale: 3, cx: 0.5, cy: 0.5 });
+  s.flush();
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.views.bogus = { scale: 'x' };
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const t = mk();
+  assert.deepEqual(t.getImageView(a), { scale: 3, cx: 0.5, cy: 0.5 });
+  assert.equal(Object.keys(t.data.views).length, 1, 'bogus view dropped');
+});
+
+test('image views follow file and folder renames and are pruned', () => {
+  const s = mk();
+  const v = { scale: 2, cx: 0.5, cy: 0.5 };
+  const a = path.join(dir, 'a.png');
+  const b = path.join(dir, 'b.png');
+  s.setImageView(a, v);
+  s.renameImageKey(a, b);
+  assert.equal(s.getImageView(a), null);
+  assert.deepEqual(s.getImageView(b), v);
+  const inside = path.join(dir, 'Old', 'p.png');
+  s.setImageView(inside, v);
+  s.renameFolderPrefix(path.join(dir, 'Old'), path.join(dir, 'New'));
+  assert.deepEqual(s.getImageView(path.join(dir, 'New', 'p.png')), v);
+  const keep = write(path.join(dir, 'keep.png'));
+  s.setImageView(keep, v);
+  s.pruneMissing();
+  assert.deepEqual(Object.keys(s.data.views), [s.norm(keep)]);
+});

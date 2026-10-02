@@ -162,6 +162,7 @@ if (BULK) {
   for (let i = 0; i < BULK; i++) put(`Pics/bulk/img_${String(i).padStart(5, '0')}.png`, small);
 }
 const EXPECT = 6 + BULK;
+const EXPECT_DIRECT = 5; // images directly in Pics/ (a folder shows only its own images)
 
 function cleanup() {
   if (process.env.KM_SMOKE_KEEP === '1') {
@@ -198,6 +199,7 @@ const env = {
   KM_SMOKE_DIR: pics,
   KM_SMOKE_USERDATA: userData,
   KM_SMOKE_EXPECT: String(EXPECT),
+  KM_SMOKE_EXPECT_DIRECT: String(EXPECT_DIRECT),
   KM_SMOKE_OUTSIDE: path.join(work, 'outside.png'),
 };
 delete env.ELECTRON_RUN_AS_NODE;

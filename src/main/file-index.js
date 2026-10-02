@@ -140,6 +140,12 @@ class FileIndex {
     if (fsops.isSupported(to)) this._add([it]);
   }
 
+  /** App-initiated delete (Recycle Bin) of a file or a whole folder. */
+  removePath(p) {
+    this.entries.delete(this.key(p));
+    this._removeUnder(p);
+  }
+
   /** App-initiated folder rename. */
   renameDir(from, to) {
     const moved = [];
