@@ -148,8 +148,7 @@ async function phase1({ wb, sidebar, step, report }) {
     // rapid changes: stale loads must be ignored, the last pick wins
     g.selectIndex(1); g.selectIndex(2); g.selectIndex(3);
     const last = g.view[3];
-    await waitFor(() => preview.viewer.item && preview.viewer.item.path === last.path && (preview.viewer.img.getAttribute('src') === fileUrl(last)
-      || (last.ext === '.gif' && preview.viewer.img.getAttribute('src').startsWith('blob:'))), 5000, 'last rapid pick shown');
+    await waitFor(() => preview.viewer.item && preview.viewer.item.path === last.path && preview.viewer.img.getAttribute('src') === fileUrl(last), 5000, 'last rapid pick shown');
     await new Promise((res) => setTimeout(res, 900)); // a watcher event would arrive within ~500 ms
     sampling = false;
     mo.disconnect();
@@ -845,8 +844,8 @@ async function viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, rep
   g.selectPaths([gif.path], { emit: true });
   await waitFor(() => v.item && v.item.path === gif.path && v.natW > 0, 5000, 'preview shows the gif');
   await pv.loading;
-  assert(v.img.classList.contains('gif') && v.img.src.startsWith('blob:'), 'preview shows a still frame of the gif');
-  step('GIF: still thumbnail and still Preview, both with an orange frame');
+  assert(!v.img.classList.contains('gif') && v.img.getAttribute('src') === fileUrl(gif), 'Preview plays the GIF itself, no frame');
+  step('GIF: still thumbnail with a red-orange frame; Preview animates without a frame');
 
   // multi-folder: Ctrl+click a subfolder adds its images; again removes them
   const sub = (await api.listDir(root)).dirs[0].path;

@@ -3,8 +3,7 @@
 // wheel zoom at the cursor, drag to pan, Ctrl+0 / middle-click / 0 → fit,
 // 1 → 100%, double-click toggles 100% ⇔ fit, HUD with the zoom level.
 // With `persistView` the zoom of each image is remembered (library.json) and
-// restored when it is shown again; fit forgets it. With `stillGif` a GIF is
-// shown as its first frame with an orange frame instead of animating.
+// restored when it is shown again; fit forgets it.
 import { el, fileUrl } from './ui.js';
 import { api } from './state.js';
 import { keyLabel } from './commands.js';
@@ -14,12 +13,10 @@ const MAX_SCALE = 20;
 const STEP = 1.15;
 const SAVE_DELAY = 400;
 
-const isGifItem = (item) => (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.gif';
-
 export class ImageViewer {
   /**
    * @param {{onNavigate?:(delta:number)=>void, onRename?:()=>void, emptyText?:string,
-   *          persistView?:boolean, stillGif?:boolean}} opts
+   *          persistView?:boolean}} opts
    */
   constructor(opts = {}) {
     this.opts = opts;
@@ -33,7 +30,6 @@ export class ImageViewer {
     this.fitted = true;
     this.token = 0;
     this.swaps = 0;
-    this.blobUrl = null;
     this.pendingSave = null; // {path, timer}
 
     this.nameEl = el('div', { class: 'iv-name' });
@@ -109,12 +105,6 @@ export class ImageViewer {
     this.ro.disconnect();
     this.token++;
     this._flushSave();
-    this._setBlob(null);
-  }
-
-  _setBlob(url) {
-    if (this.blobUrl) URL.revokeObjectURL(this.blobUrl);
-    this.blobUrl = url;
   }
 
   /** Show an empty/message state. */
@@ -124,7 +114,6 @@ export class ImageViewer {
     this.item = null;
     this.natW = 0;
     this.img.removeAttribute('src');
-    this._setBlob(null);
     this.img.style.visibility = 'hidden';
     this.nameEl.textContent = '';
     this.posEl.textContent = '';
@@ -151,14 +140,12 @@ export class ImageViewer {
     if (same) return Promise.resolve();
     const token = ++this.token;
     const isSvg = (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.svg';
-    const still = !!this.opts.stillGif && isGifItem(item);
     const url = fileUrl(item);
     const probe = new Image();
     probe.decoding = 'async';
-    if (still) probe.crossOrigin = 'anonymous'; // readable by the canvas (stillFrame)
     probe.src = url;
     const view = this.opts.persistView ? api.getImageView(item.path).catch(() => null) : Promise.resolve(null);
-    return Promise.all([probe.decode(), view]).then(async ([, saved]) => {
+    return Promise.all([probe.decode(), view]).then(([, saved]) => {
       if (token !== this.token) return;
       let w = probe.naturalWidth || 0;
       let h = probe.naturalHeight || 0;
@@ -167,19 +154,10 @@ export class ImageViewer {
         w = Math.round(r.width * 0.8) || 800;
         h = Math.round(r.height * 0.8) || 600;
       }
-      let src = url; // same URL → served decoded from the memory cache
-      let blob = null;
-      if (still) {
-        blob = await stillFrame(probe, w, h);
-        if (token !== this.token) { if (blob) URL.revokeObjectURL(blob); return; }
-        if (blob) src = blob;
-      }
       this.natW = w;
       this.natH = h;
       this.isSvg = isSvg;
-      this.img.src = src;
-      this._setBlob(blob);
-      this.img.classList.toggle('gif', still);
+      this.img.src = url; // same URL → served decoded from the memory cache
       this.swaps++;
       this.img.style.visibility = 'visible';
       this.msg.classList.add('hidden');
@@ -324,7 +302,6 @@ export class ImageViewer {
       s.height = `${this.natH}px`;
       s.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
     }
-    s.setProperty('--iv-s', String(this.isSvg ? 1 : this.scale));
     this.stage.classList.toggle('pannable', this._canPan());
     this.hud.textContent = `${this.zoomPercent()}%`;
   }
@@ -345,24 +322,5 @@ export class ImageViewer {
   /** 名前の変更 command (bound in the keymap). */
   rename() {
     if (this.opts.onRename && this.item) this.opts.onRename();
-  }
-}
-
-/** First frame of a decoded (animated) image as an object URL, or null. */
-async function stillFrame(img, w, h) {
-  try {
-    const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    c.getContext('2d').drawImage(img, 0, 0, w, h);
-    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
-    if (!blob) return null;
-    const url = URL.createObjectURL(blob);
-    const probe = new Image();
-    probe.src = url;
-    await probe.decode().catch(() => {});
-    return url;
-  } catch {
-    return null;
   }
 }

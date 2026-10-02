@@ -24,7 +24,6 @@ export class PreviewPane {
       onRename: () => { if (state.selection.primary) renameFileWithDialog(state.selection.primary); },
       emptyText: '画像を選択すると、ここにプレビューが表示されます。',
       persistView: true,
-      stillGif: true,
     });
     this.viewer.clear();
     this.el = el('div', { class: 'pane image-pane preview-pane' }, this.viewer.el);

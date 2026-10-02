@@ -28,7 +28,7 @@ if (SMOKE) {
 }
 
 protocol.registerSchemesAsPrivileged([
-  // corsEnabled: still GIFs are redrawn on a canvas, which needs an untainted (CORS) load
+  // corsEnabled: GIF thumbnails are redrawn on a canvas, which needs an untainted (CORS) load
   { scheme: 'kmimg', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
