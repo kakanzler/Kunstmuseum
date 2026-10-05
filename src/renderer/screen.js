@@ -62,17 +62,19 @@ async function folderOptions(select, preferred) {
 }
 
 /**
- * Open the 「スクリーン表示」 dialog. `wb` provides the MRU gallery (default folder).
+ * Open the 「スクリーン表示」 dialog. `wb` provides the MRU gallery (default folder);
+ * `folder` (from a context menu) presets the target folder instead.
  * Resolves when the dialog closes.
  */
-export async function openScreenDialog(wb) {
+export async function openScreenDialog(wb, { folder = null } = {}) {
   if (dialogOpen || active) return;
   dialogOpen = true;
   try {
     const d = defaults();
+    if (folder) d.target = 'folder';
     const mru = wb && wb.mruGalleryPane();
     const mruFolder = mru && mru.source && mru.source.kind === 'folder' ? mru.source.path : null;
-    const preferredFolder = mruFolder || d.folder;
+    const preferredFolder = folder || mruFolder || d.folder;
 
     const radio = (value, label) => {
       const input = el('input', { type: 'radio', name: 'screen-target', value });

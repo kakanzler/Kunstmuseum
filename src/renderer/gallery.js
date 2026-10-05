@@ -7,6 +7,7 @@ import {
 import { el, toast, toastError, showContextMenu, collator, thumbUrl, basename, debounce } from './ui.js';
 import { tagChip, fillTagSelect } from './tags.js';
 import { filterMatcher } from './tag-tree.js';
+import { openScreenDialog } from './screen.js';
 import {
   checkFileName, renameFileTo, splitName, moveInto, draggedPaths, dragSource, startPathsDrag, DRAG_TYPE,
   trashPaths, isTrashed,
@@ -718,7 +719,16 @@ export class GalleryPane {
 
   _onContextMenu(e) {
     const i = this._tileIndex(e.target);
-    if (i < 0) return;
+    const screenItem = {
+      label: 'スクリーン表示を開始…',
+      action: () => openScreenDialog(this.ctx, { folder: this.source && this.source.kind === 'folder' ? this.source.path : null }),
+    };
+    if (i < 0) {
+      if (!this.grid.contains(e.target)) return;
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [screenItem]);
+      return;
+    }
     e.preventDefault();
     const it = this.view[i];
     if (!this.selection.has(it.path)) this.selectIndex(i);
@@ -734,6 +744,8 @@ export class GalleryPane {
         label: multi ? `パスをコピー（${paths.length}件）` : 'パスをコピー',
         action: async () => { await api.copyText(paths.join('\r\n')); toast('パスをコピーしました。', 'success', 1800); },
       },
+      { separator: true },
+      screenItem,
     ]);
   }
 

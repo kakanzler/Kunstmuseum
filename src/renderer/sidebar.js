@@ -12,6 +12,7 @@ import {
   trashPaths, isTrashed,
 } from './ops.js';
 import { openBulkEditor } from './bulk.js';
+import { openScreenDialog } from './screen.js';
 import { sourceDirs, folderSource } from './gallery.js';
 
 const PAGE = 500;
@@ -480,6 +481,7 @@ function onContextMenu(e) {
   const items = [];
   if (exists) {
     items.push({ label: '新しいギャラリータブで開く', action: () => ctx.openFolder(path, { newTab: true }) });
+    items.push({ label: 'スクリーン表示を開始…', action: () => openScreenDialog(ctx, { folder: path }) });
     items.push({ label: 'カテゴリを一括編集…', action: () => openBulkEditor({ folder: path, includeSub: true }) });
     items.push({ label: '名前の変更', action: () => startRename(path) });
     items.push({ label: 'エクスプローラーで表示', action: () => api.openPath(path) });
