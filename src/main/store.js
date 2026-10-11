@@ -19,7 +19,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   layout: null,      // editor-group layout (renderer layout-model serialize())
   showFiles: true,   // sidebar tree lists image files
   keybindings: {},   // shortcut overrides {commandId: combo}; defaults live in renderer/keymap.js
-  screen: { target: 'folder', folder: null, includeSub: true, tagId: null, interval: 5, order: 'name', loop: true },
+  screen: { target: 'folder', folder: null, includeSub: true, tagId: null, interval: 5, order: 'name', loop: true, fromSelection: true },
+  fetch: null,       // 右サイドバー fotoget panel {open, url-less form defaults}; defaults live in renderer/fetcher.js
 });
 
 const SEED_TAG_TYPES = [

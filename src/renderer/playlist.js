@@ -91,6 +91,24 @@ export class Playlist {
     return this.current;
   }
 
+  /**
+   * Begin at `item` (e.g. the image selected when the show starts). A shuffled
+   * order moves it to the front so the rest of the pass is still random.
+   * Returns false when the item is not in the list.
+   */
+  startAt(item) {
+    const i = this.order.indexOf(item);
+    if (i < 0) return false;
+    if (this.shuffled) {
+      this.order.splice(i, 1);
+      this.order.unshift(item);
+      this.index = 0;
+    } else {
+      this.index = i;
+    }
+    return true;
+  }
+
   /** Drop an item (e.g. a missing/broken file); the current position moves to its successor. */
   remove(item) {
     const i = this.order.indexOf(item);

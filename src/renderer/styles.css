@@ -96,8 +96,9 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 5px minmax(0, 1fr) 5px var(--inspector-w);
+  grid-template-columns: var(--sidebar-w) 5px minmax(0, 1fr) 5px var(--inspector-w) var(--fetch-w, 0px);
 }
+.layout.fetch-open { --fetch-w: 320px; }
 .resizer { cursor: col-resize; background: var(--bg); position: relative; }
 .resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--line); }
 .resizer:hover::after, .resizer.active::after { background: var(--accent); width: 2px; left: 1px; }
@@ -292,6 +293,27 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
 .ac-item.active, .ac-item:hover { background: var(--accent-dim); }
 .ac-item .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .ac-item .ac-type { margin-left: auto; color: var(--muted); font-size: 11px; }
+
+/* ---------- 画像取得サイドバー (fotoget) ---------- */
+.fetcher { display: none; background: var(--panel); border-left: 1px solid var(--line); min-width: 0; flex-direction: column; overflow: hidden; }
+.layout.fetch-open .fetcher { display: flex; }
+.fetch-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 6px; }
+.fetch-head h3 { font-size: 12px; font-weight: 600; color: var(--text-2); margin: 0; letter-spacing: .05em; }
+.fetch-form { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 7px; border-bottom: 1px solid var(--line); }
+.fetch-field { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.fetch-label { color: var(--muted); font-size: 12px; }
+.fetch-field .input { width: 100%; min-width: 0; }
+.fetch-check { padding-left: 70px; }
+.fetch-more summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.fetch-more .fetch-field + .fetch-field { margin-top: 6px; }
+.fetch-preview { font: 11px/1.4 Consolas, "Cascadia Mono", monospace; color: var(--muted); word-break: break-all; background: var(--bg); border-radius: var(--radius); padding: 5px 7px; user-select: text; }
+.fetch-actions { display: flex; gap: 6px; }
+.fetch-actions .fetch-run { flex: 1; }
+.fetch-status { font-size: 12px; min-height: 17px; color: var(--text-2); word-break: break-all; }
+.fetch-status.error { color: var(--danger); }
+.fetch-status.ok { color: var(--ok); }
+.fetch-status.busy { color: var(--accent); }
+.fetch-log { flex: 1; min-height: 0; margin: 0; padding: 8px 12px; overflow: auto; font: 11px/1.45 Consolas, "Cascadia Mono", monospace; color: var(--text-2); white-space: pre-wrap; word-break: break-all; user-select: text; }
 
 /* ---------- image viewer (Preview / image tabs) ---------- */
 .iv { position: absolute; inset: 0; display: flex; flex-direction: column; background: #09090a; }

@@ -2,7 +2,7 @@
 // Two stacked layers crossfade; the next image is always preloaded and
 // decoded before it is shown, so slides never flash. Broken files are skipped.
 import { api, state, saveSettings, setGlobalSelection, normKey, pathUnder } from './state.js';
-import { el, openModal, toast, toastError, fileUrl } from './ui.js';
+import { el, openModal, toast, toastError, fileUrl, basename } from './ui.js';
 import { fillTagSelect } from './tags.js';
 import { expandWithDescendants } from './tag-tree.js';
 import { Playlist } from './playlist.js';
@@ -34,6 +34,7 @@ function defaults() {
     interval: Number.isFinite(interval) && interval >= 1 && interval <= 3600 ? interval : 5,
     order: s.order === 'random' ? 'random' : 'name',
     loop: s.loop !== false,
+    fromSelection: s.fromSelection !== false,
   };
 }
 
@@ -99,6 +100,13 @@ export async function openScreenDialog(wb, { folder = null } = {}) {
     order.value = d.order;
     const loop = el('input', { type: 'checkbox', class: 'screen-loop' });
     loop.checked = d.loop;
+    // default: begin at the image selected in the gallery / Preview
+    const selPath = state.selection.primary;
+    const fromSel = el('input', { type: 'checkbox', class: 'screen-from-selection' });
+    fromSel.checked = d.fromSelection && !!selPath;
+    fromSel.disabled = !selPath;
+    const fromSelLabel = el('label', { class: 'toggle', title: selPath || '画像が選択されていません' }, fromSel,
+      selPath ? `選択中の画像から開始（${basename(selPath)}）` : '選択中の画像から開始（未選択）');
     const err = el('div', { class: 'error' });
 
     const folderBox = el('div', { class: 'screen-sub' }, folderSel,
@@ -126,8 +134,10 @@ export async function openScreenDialog(wb, { folder = null } = {}) {
         el('div', { class: 'screen-field inline' }, interval, el('span', { class: 'muted small' }, '秒（1〜3600）'))),
       el('div', { class: 'screen-row' }, el('div', { class: 'screen-label' }, '順番'),
         el('div', { class: 'screen-field inline' }, order, el('label', { class: 'toggle' }, loop, 'ループ'))),
+      el('div', { class: 'screen-row' }, el('div', { class: 'screen-label' }, '開始位置'),
+        el('div', { class: 'screen-field inline' }, fromSelLabel)),
       err,
-      el('div', { class: 'note' }, '表示中: Esc 終了・←/→ 前後・Space 一時停止'));
+      el('div', { class: 'note' }, '表示中: Esc / 右クリック 終了・←/→ 前後・Space 一時停止'));
 
     let busy = false;
     const start = async (close) => {
@@ -151,7 +161,8 @@ export async function openScreenDialog(wb, { folder = null } = {}) {
         toastError(e, '画像を読み込めませんでした。');
         return;
       }
-      const opts = { target, folder: folderSel.value || d.folder, includeSub: includeSub.checked, tagId: tagSel.value || d.tagId, interval: sec, order: order.value, loop: loop.checked };
+      const opts = { target, folder: folderSel.value || d.folder, includeSub: includeSub.checked, tagId: tagSel.value || d.tagId, interval: sec, order: order.value, loop: loop.checked,
+        fromSelection: fromSel.disabled ? d.fromSelection : fromSel.checked };
       saveSettings({ screen: opts });
       busy = false;
       if (!items.length) {
@@ -159,7 +170,7 @@ export async function openScreenDialog(wb, { folder = null } = {}) {
         return; // keep the dialog open
       }
       close(true);
-      await startScreen(items, opts);
+      await startScreen(items, { ...opts, startPath: fromSel.checked ? selPath : null });
     };
 
     await openModal({
@@ -198,6 +209,11 @@ class ScreenShow {
   constructor(items, opts) {
     this.opts = opts;
     this.playlist = new Playlist(items, { order: opts.order, loop: opts.loop });
+    if (opts.startPath) {
+      const key = normKey(opts.startPath);
+      const first = this.playlist.order.find((it) => normKey(it.path) === key);
+      if (first) this.playlist.startAt(first); // not in the target: start at the beginning
+    }
     this.interval = opts.interval;
     this.paused = false;
     this.ended = false;
@@ -205,6 +221,7 @@ class ScreenShow {
     this.token = 0;
     this.shownCount = 0;
     this.lastShown = null;
+    this.firstShown = null;
     this.decoded = new Map(); // url → Promise (decoded offscreen)
 
     this.layers = [0, 1].map(() => {
@@ -218,6 +235,8 @@ class ScreenShow {
     this.onKey = (e) => this.handleKey(e);
     this.onMove = () => this.poke();
     this.block = (e) => { e.preventDefault(); e.stopPropagation(); };
+    // right-click ends the show (contextmenu fires after mouseup, so nothing leaks to the app below)
+    this.onContextMenu = (e) => { this.block(e); this.exit(); };
   }
 
   async start() {
@@ -225,9 +244,10 @@ class ScreenShow {
     document.body.append(this.el);
     window.addEventListener('keydown', this.onKey, true);
     this.el.addEventListener('mousemove', this.onMove);
-    for (const t of ['click', 'dblclick', 'mousedown', 'auxclick', 'contextmenu', 'wheel', 'dragstart']) {
+    for (const t of ['click', 'dblclick', 'mousedown', 'auxclick', 'wheel', 'dragstart']) {
       this.el.addEventListener(t, this.block, t === 'wheel' ? { passive: false } : undefined);
     }
+    this.el.addEventListener('contextmenu', this.onContextMenu);
     this.el.focus();
     this.poke();
     await this.showCurrent();
@@ -275,6 +295,7 @@ class ScreenShow {
       front.root.classList.remove('visible');
       this.front = 1 - this.front;
       this.lastShown = item;
+      if (!this.firstShown) this.firstShown = item;
       this.shownCount++;
       this.ended = false;
       this.renderHud();
@@ -345,7 +366,8 @@ class ScreenShow {
     // screen mode owns the keyboard: nothing else may see (or swallow) these keys
     e.preventDefault();
     e.stopImmediatePropagation();
-    if (e.repeat && e.key === 'Escape') return;
+    if (e.repeat && (e.key === 'Escape' || e.code === 'Space')) return;
+    if (e.code === 'Space') { this.togglePause(); return; } // also when an IME reports another key
     switch (e.key) {
       case 'Escape': this.exit(); break;
       case 'ArrowRight': this.next(); break;

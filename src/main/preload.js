@@ -71,6 +71,23 @@ contextBridge.exposeInMainWorld('api', {
   screenExit: call('screen:exit'),
   isFullScreen: call('win:isFullScreen'),
 
+  // 画像取得 (fotoget)
+  fetchDefaults: call('fetch:defaults'),
+  fetchRun: call('fetch:run'),
+  fetchCancel: call('fetch:cancel'),
+  fetchOpenOut: call('fetch:openOut'),
+  // cb({id, stream, text}) / cb({id, code, cancelled, error})
+  onFetchOutput: (cb) => {
+    const fn = (_e, m) => cb(m);
+    ipcRenderer.on('fetch:output', fn);
+    return () => ipcRenderer.removeListener('fetch:output', fn);
+  },
+  onFetchDone: (cb) => {
+    const fn = (_e, m) => cb(m);
+    ipcRenderer.on('fetch:done', fn);
+    return () => ipcRenderer.removeListener('fetch:done', fn);
+  },
+
   smokeCopyFixture: call('smoke:copyFixture'), // only registered in smoke mode
   smokeReport: (report) => ipcRenderer.send('smoke:report', report),
 });

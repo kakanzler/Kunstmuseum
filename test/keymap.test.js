@@ -30,6 +30,22 @@ test('eventToCombo uses code for letters/digits whatever `key` says (IME, layout
   assert.equal(km.eventToCombo(ev({ key: 'Unidentified', code: 'KeyA', ctrlKey: true })), 'Ctrl+A');
 });
 
+test('eventToCombo follows the produced character for punctuation (JIS layout)', () => {
+  assert.equal(km.eventToCombo(ev({ key: ']', code: 'BracketRight', ctrlKey: true })), 'Ctrl+]', 'US ]');
+  assert.equal(km.eventToCombo(ev({ key: ']', code: 'Backslash', ctrlKey: true })), 'Ctrl+]', 'JIS ] sits on the US backslash position');
+  assert.equal(km.eventToCombo(ev({ key: '\\', code: 'IntlRo', ctrlKey: true })), 'Ctrl+\\', 'JIS ろ key');
+  assert.equal(km.eventToCombo(ev({ key: '¥', code: 'IntlYen', ctrlKey: true })), 'Ctrl+\\', 'JIS ¥ reported as ¥');
+  assert.equal(km.eventToCombo(ev({ key: 'Process', code: 'BracketRight', ctrlKey: true })), 'Ctrl+]', 'IME: falls back to code');
+  assert.equal(km.eventToCombo(ev({ key: '<', code: 'Comma', ctrlKey: true, shiftKey: true })), 'Ctrl+Shift+,', 'Shift keeps the code');
+});
+
+test('fetch.toggle defaults to Ctrl+] without conflicts', () => {
+  const b = km.resolveBindings({});
+  assert.equal(b.get('fetch.toggle'), 'Ctrl+]');
+  assert.equal(km.findConflict(b, 'Ctrl+]', 'fetch.toggle'), null);
+  assert.equal(km.validateCombo('Ctrl+]'), null);
+});
+
 test('eventToCombo returns null for modifier-only presses', () => {
   for (const key of ['Control', 'Alt', 'Shift', 'Meta']) {
     assert.equal(km.eventToCombo(ev({ key, code: `${key}Left`, ctrlKey: key === 'Control' })), null);

@@ -88,3 +88,23 @@ test('remove skips broken items and keeps the position sane', () => {
   assert.equal(p.current, null);
   assert.equal(p.next(), null);
 });
+
+test('startAt begins at the given item (name order keeps its position)', () => {
+  const list = items('a', 'b', 'c');
+  const p = new Playlist(list, { loop: false });
+  assert.equal(p.startAt(p.order[1]), true);
+  assert.equal(p.current.name, 'b');
+  assert.equal(p.next().name, 'c');
+  assert.equal(p.next(), null, 'stops at the end without loop');
+  assert.equal(p.startAt({ name: 'x', path: 'x' }), false);
+});
+
+test('startAt moves the item to the front of a shuffled pass', () => {
+  const p = new Playlist(items('a', 'b', 'c', 'd', 'e'), { order: 'random', random: rng(3) });
+  const target = p.base.find((x) => x.name === 'd');
+  p.startAt(target);
+  assert.equal(p.index, 0);
+  assert.equal(p.current, target);
+  assert.equal(p.length, 5);
+  assert.deepEqual(p.order.map((x) => x.name).sort(), ['a', 'b', 'c', 'd', 'e']);
+});

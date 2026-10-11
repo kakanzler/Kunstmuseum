@@ -1,12 +1,13 @@
 // Smoke test sequence (KM_SMOKE=1). Phase 1 runs against a fresh userData;
 // phase 2 is a second launch against the same userData and verifies that the
 // persisted layout was restored. Operates only on the smoke fixtures.
-import { api, state, setLib, samePath, on, pathUnder } from './state.js';
+import { api, state, setLib, samePath, on, pathUnder, setGlobalSelection } from './state.js';
 import { LayoutModel } from './layout-model.js';
 import { addTagsToPaths, openTagManager } from './tags.js';
 import { renameFolderTo } from './ops.js';
 import { inspectorPreviewImg } from './inspector.js';
 import { activeShow } from './screen.js';
+import { fetchPanelState } from './fetcher.js';
 import { isCapturing } from './settings.js';
 import { bindings } from './commands.js';
 import { toOverrides } from './keymap.js';
@@ -316,6 +317,26 @@ async function phase1({ wb, sidebar, step, report }) {
   // 15. スクリーン表示モード
   await screenModeChecks({ wb, root, tagId, step, report });
 
+  // 15b. 画像取得サイドバー: Ctrl+] (JIS "]" too) toggles it, also from its own fields;
+  // an incomplete form is rejected by main without starting a job
+  {
+    const ctrlBracket = (code = 'BracketRight', target = document) => target.dispatchEvent(new KeyboardEvent('keydown', { key: ']', code, ctrlKey: true, bubbles: true, cancelable: true }));
+    assert(!fetchPanelState().open, 'fetch panel starts closed');
+    ctrlBracket();
+    await waitFor(() => fetchPanelState().open && document.getElementById('fetcher').offsetWidth > 200, 3000, 'Ctrl+] opens the fetch panel');
+    const { form } = fetchPanelState();
+    await waitFor(() => document.activeElement === form.url, 2000, 'URL field focused');
+    form.url.value = 'https://example.com/';
+    form.title.value = '';
+    form.run.click();
+    await waitFor(() => /タイトル|ジャンル/.test(document.querySelector('.fetch-status').textContent), 3000, 'validation error shown');
+    assert(!fetchPanelState().running, 'invalid form did not start a job');
+    form.url.value = '';
+    ctrlBracket('Backslash', form.url); // JIS layout, typed inside a text field
+    await waitFor(() => !fetchPanelState().open && document.getElementById('fetcher').offsetWidth === 0, 3000, 'Ctrl+] closes it from a field');
+    step('画像取得 sidebar: Ctrl+] open/close (US + JIS, from a field), validation without running');
+  }
+
   // 16. Alt+P: Preview in the group right of the gallery, focus stays on the gallery
   {
     const altP = () => key({ key: 'p', code: 'KeyP', altKey: true });
@@ -519,20 +540,27 @@ async function screenModeChecks({ root, tagId, step, report }) {
   assert(state.selection.primary === last.path, 'last shown image selected');
   step(`Esc exited; fullscreen restored to ${wasFs}; last image selected (${last.name})`);
 
-  // category mode starts with the tagged set
+  // category mode starts with the tagged set, at the selected image (default)
+  const tagged0 = (await api.listTagged()).filter((it) => it.tags.includes(tagId));
+  setGlobalSelection({ paths: [tagged0[tagged0.length - 1].path], primary: tagged0[tagged0.length - 1].path, origin: null });
+  const wantFirst = state.selection.primary;
   box = await openDlg();
   box.querySelector('input[value="category"]').click();
   box.querySelector('.screen-tag').value = tagId;
+  assert(box.querySelector('.screen-from-selection').checked, '選択中の画像から開始 is on by default');
   startBtn().click();
   const show2 = await waitFor(() => activeShow(), 8000, 'category screen mode');
   const tagged = (await api.listTagged()).filter((it) => it.tags.includes(tagId)).map((it) => it.path).sort();
   const inShow = show2.playlist.base.map((it) => it.path).sort();
   assert(sameJson(inShow, tagged) && tagged.length > 0, `category set ${JSON.stringify(inShow)} vs ${JSON.stringify(tagged)}`);
   await waitFor(() => show2.shownCount >= 1, 5000, 'category first slide');
-  esc();
-  await waitFor(() => !activeShow(), 3000, 'category exit');
+  assert(samePath(show2.firstShown.path, wantFirst), `first slide ${show2.firstShown.path} is the selected image ${wantFirst}`);
+  // right-click ends the show without opening a context menu underneath
+  show2.el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 50, clientY: 50 }));
+  await waitFor(() => !activeShow(), 3000, 'category exit by right-click');
+  assert(document.getElementById('ctx-menu').classList.contains('hidden'), 'no context menu after right-click exit');
   await waitForAsync(async () => (await fullScreen()) === wasFs, 5000, 'fullscreen restored after category');
-  step(`category mode started with the ${tagged.length} tagged images`);
+  step(`category mode started with the ${tagged.length} tagged images at the selected one; right-click exited`);
 
   // empty set: toast, no start, dialog stays open
   const empty = await api.addTag({ name: 'スモーク空', typeId: state.lib.tagTypes[0].id });

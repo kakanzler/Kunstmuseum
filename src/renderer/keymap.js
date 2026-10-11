@@ -10,6 +10,7 @@ export const COMMANDS = [
   { id: 'preview.showRight', label: 'Preview を右に表示', category: '表示', default: 'Alt+P' },
   { id: 'graph.showRight', label: '知識グラフを右に表示', category: '表示', default: 'Alt+Q' },
   { id: 'screen.open', label: 'スクリーン表示', category: '表示', default: 'Ctrl+Alt+Shift+O' },
+  { id: 'fetch.toggle', label: '画像取得サイドバー（fotoget）', category: '表示', default: 'Ctrl+]' },
   { id: 'settings.open', label: '設定を開く', category: '全般', default: 'Ctrl+,' },
   { id: 'search.quickOpen', label: 'ファイル名で検索（全フォルダ）', category: '全般', default: 'Ctrl+F' },
   { id: 'tags.bulkFolder', label: 'フォルダのカテゴリを一括編集', category: '編集', default: 'Alt+Shift+C' },
@@ -51,6 +52,7 @@ const KEY_KEYS = {
   Tab: 'Tab', Enter: 'Enter', Delete: 'Delete', Backspace: 'Backspace', Insert: 'Insert',
   Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', '¥': '\\',
 };
+const PUNCT_CODES = new Set(['Backslash', 'IntlYen', 'IntlRo', 'Comma', 'Period', 'Slash', 'Semicolon', 'Quote', 'BracketLeft', 'BracketRight', 'Minus', 'Equal', 'Backquote']);
 const NAMED = new Set([
   'Space', 'Tab', 'Enter', 'Esc', 'Up', 'Down', 'Left', 'Right', 'Delete', 'Backspace', 'Insert',
   'Home', 'End', 'PageUp', 'PageDown',
@@ -70,6 +72,11 @@ export function keyName(e) {
   if (/^Numpad[0-9]$/.test(code)) return code.slice(6);
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(e.key || '')) return e.key;
+  // punctuation: trust the produced character over the physical (US) position, so
+  // JIS "]" (code Backslash) is "]", not "\\"; Shift changes `key`, keep `code` then
+  if (PUNCT_CODES.has(code) && !e.shiftKey && typeof e.key === 'string' && e.key.length === 1) {
+    return KEY_KEYS[e.key] || e.key;
+  }
   if (CODE_KEYS[code]) return CODE_KEYS[code];
   if (KEY_KEYS[e.key]) return KEY_KEYS[e.key];
   if (typeof e.key === 'string' && e.key.length === 1) return e.key.toUpperCase();

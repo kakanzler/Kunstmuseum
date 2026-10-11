@@ -11,6 +11,7 @@ import { initKeymap, registerCommands, commandForEvent, runCommand, keyLabel } f
 import { toggleSettings, isSettingsOpen } from './settings.js';
 import { openQuickOpen, isQuickOpenOpen } from './quickopen.js';
 import { openBulkEditor } from './bulk.js';
+import { initFetchPanel, toggleFetchPanel } from './fetcher.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -82,6 +83,8 @@ function onKeyDown(e) {
     return;
   }
   if (isModalOpen() || isQuickOpenOpen()) return;
+  // the 画像取得 sidebar is mostly text fields: its toggle must also close it from there
+  if (id === 'fetch.toggle') { e.preventDefault(); runCommand(id); return; }
   if (isEditable(e.target)) return;
   if (id) {
     e.preventDefault();
@@ -102,6 +105,7 @@ function registerAllCommands() {
     'graph.showRight': () => wb.showSingletonRight('graph'),
     'screen.open': () => openScreenDialog(wb),
     'settings.open': () => toggleSettings(settingsCtx),
+    'fetch.toggle': () => toggleFetchPanel(),
     'tab.close': () => wb.closeActive(),
     'tab.splitRight': () => wb.splitActive('right'),
     'tab.next': () => wb.cycle(1),
@@ -151,7 +155,7 @@ function openBulkForCurrentFolder() {
 
 /** Top-bar hint, rendered from the current bindings. */
 function renderHint() {
-  $('topbar-hint').textContent = `${keyLabel('tab.splitRight')} 分割・${keyLabel('tab.close')} 閉じる・${keyLabel('preview.showRight')} Preview・${keyLabel('graph.showRight')} グラフ・${keyLabel('settings.open')} 設定`;
+  $('topbar-hint').textContent = `${keyLabel('tab.splitRight')} 分割・${keyLabel('tab.close')} 閉じる・${keyLabel('preview.showRight')} Preview・${keyLabel('graph.showRight')} グラフ・${keyLabel('fetch.toggle')} 画像取得・${keyLabel('settings.open')} 設定`;
 }
 
 async function boot() {
@@ -173,6 +177,7 @@ async function boot() {
   initResizers();
   sidebar.initSidebar(wb);
   initInspector(wb);
+  await initFetchPanel();
   $('btn-tag-manager').addEventListener('click', () => openTagManager());
   document.addEventListener('keydown', onKeyDown);
   api.onFsChanged((dirs) => emit('fs-changed', dirs));

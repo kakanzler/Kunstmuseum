@@ -9,9 +9,15 @@ const {
 const fsops = require('./fsops');
 const { Store } = require('./store');
 const { FileIndex } = require('./file-index');
+const { FetchRunner, FETCH_DEFAULTS } = require('./fetcher');
 
 // Quick Open (Ctrl+F) index of all images below the registered roots
 const fileIndex = new FileIndex();
+
+// 画像取得サイドバー: one fotoget job at a time, output streamed to the window
+const fetchRunner = new FetchRunner((channel, payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+});
 
 // ---------------------------------------------------------------------------
 // Smoke-test mode: isolated userData, fixture folder, exit code 0/1.
@@ -477,6 +483,17 @@ function registerIpc() {
     endScreenMode();
     return true;
   });
+  handle('fetch:defaults', () => ({ ...FETCH_DEFAULTS }));
+  handle('fetch:run', (opts) => fetchRunner.run(opts));
+  handle('fetch:cancel', () => fetchRunner.cancel());
+  handle('fetch:openOut', async (dir) => {
+    const d = path.resolve(String(dir || FETCH_DEFAULTS.out));
+    // directories only: openPath on a file would launch it
+    if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) throw new Error(`フォルダがありません: ${d}`);
+    const err = await shell.openPath(d);
+    if (err) throw new Error(err);
+    return true;
+  });
   handle('win:isFullScreen', () => !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()));
 
   ipcMain.on('smoke:report', (_ev, report) => smokeFinish(report));
@@ -712,6 +729,7 @@ if (!gotLock) {
   });
 
   app.on('before-quit', () => {
+    fetchRunner.cancel();
     try { store && store.flush(); } catch { /* ignore */ }
   });
 }
