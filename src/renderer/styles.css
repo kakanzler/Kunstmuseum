@@ -97,6 +97,9 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
   min-height: 0;
   display: grid;
   grid-template-columns: var(--sidebar-w) 5px minmax(0, 1fr) 5px var(--inspector-w) var(--fetch-w, 0px);
+  /* one row clamped to the window: an implicit auto row grows with the folder
+     tree, pushing the app's bottom off-screen and leaving the tree unscrollable */
+  grid-template-rows: minmax(0, 1fr);
 }
 .layout.fetch-open { --fetch-w: 320px; }
 .resizer { cursor: col-resize; background: var(--bg); position: relative; }
@@ -104,12 +107,12 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
 .resizer:hover::after, .resizer.active::after { background: var(--accent); width: 2px; left: 1px; }
 
 /* ---------- sidebar ---------- */
-.sidebar { background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+.sidebar { background: var(--panel); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .sidebar-head { padding: 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
 .sidebar-toggle { font-size: 12px; }
 .sidebar-hint { padding: 8px 12px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
 .sidebar.drop-files { outline: 2px dashed var(--accent); outline-offset: -4px; }
-.tree { flex: 1; overflow: auto; padding: 6px 0; outline: none; }
+.tree { flex: 1; min-height: 0; overflow: auto; padding: 6px 0; outline: none; }
 .tree:focus .tree-row.focused { outline: 1px solid var(--line-2); outline-offset: -1px; }
 .tree-row {
   display: flex; align-items: center; gap: 4px;

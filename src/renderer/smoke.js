@@ -337,6 +337,25 @@ async function phase1({ wb, sidebar, step, report }) {
     step('画像取得 sidebar: Ctrl+] open/close (US + JIS, from a field), validation without running');
   }
 
+  // 15c. a tall folder tree scrolls inside the sidebar and never pushes the app past the window bottom
+  {
+    const tree = document.getElementById('tree');
+    const filler = Array.from({ length: 400 }, (_, i) => Object.assign(document.createElement('div'), { className: 'tree-row km-smoke-filler', textContent: `filler ${i}` }));
+    tree.append(...filler);
+    await sleep(50);
+    const layoutBottom = document.getElementById('layout').getBoundingClientRect().bottom;
+    const footBottom = document.querySelector('.sidebar-foot').getBoundingClientRect().bottom;
+    const scrollable = tree.scrollHeight > tree.clientHeight;
+    tree.scrollTop = 500;
+    const scrolled = tree.scrollTop > 0;
+    filler.forEach((n) => n.remove());
+    tree.scrollTop = 0;
+    assert(layoutBottom <= window.innerHeight + 0.5, `layout bottom ${layoutBottom} exceeds the window ${window.innerHeight}`);
+    assert(footBottom <= window.innerHeight + 0.5, `sidebar footer ${footBottom} is off-screen (${window.innerHeight})`);
+    assert(scrollable && scrolled, 'tall tree scrolls');
+    step(`tall tree: scrolls inside the sidebar, layout bottom ${Math.round(layoutBottom)} ≤ window ${window.innerHeight}`);
+  }
+
   // 16. Alt+P: Preview in the group right of the gallery, focus stays on the gallery
   {
     const altP = () => key({ key: 'p', code: 'KeyP', altKey: true });
