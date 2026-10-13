@@ -164,7 +164,7 @@ test('atomic save/load roundtrip', async () => {
   const img = path.join(dir, 'k.png');
   s.addTagsToImages([img], [t.id]);
   s.addRoot(dir);
-  s.setSettings({ thumbSize: 222, bogus: 1 });
+  s.setSettings({ thumbSize: 222, bogus: 1, maskedFolders: [path.join(dir, 'Hidden')] });
   s.flush();
   assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp-')), [], 'no tmp leftovers');
 
@@ -172,6 +172,7 @@ test('atomic save/load roundtrip', async () => {
   assert.deepEqual(s2.data, s.data);
   assert.equal(s2.getSettings().thumbSize, 222);
   assert.equal(s2.getSettings().bogus, undefined);
+  assert.deepEqual(s2.getSettings().maskedFolders, [path.join(dir, 'Hidden')]);
   assert.deepEqual(s2.getImageTags(img), [t.id]);
 });
 

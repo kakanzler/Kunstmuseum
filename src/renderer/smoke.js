@@ -67,7 +67,7 @@ export async function run({ wb, sidebar, savedLayout }) {
   const report = { ok: false, phase, steps: [] };
   const step = (s) => { report.steps.push(s); console.log(`[smoke] ${s}`); };
   try {
-    if (phase === 2) await phase2({ wb, savedLayout, step, report });
+    if (phase === 2) await phase2({ wb, sidebar, savedLayout, step, report });
     else await phase1({ wb, sidebar, step, report });
     report.ok = true;
   } catch (e) {
@@ -441,7 +441,7 @@ function comparable(layout) {
   return l;
 }
 
-async function phase2({ wb, savedLayout, step, report }) {
+async function phase2({ wb, sidebar, savedLayout, step, report }) {
   assert(savedLayout && Array.isArray(savedLayout.groups), 'a layout was persisted by phase 1');
   await Promise.all([...wb.panes.values()].map((p) => p.loadPromise || p.loading));
   const now = wb.serialize();
@@ -455,6 +455,15 @@ async function phase2({ wb, savedLayout, step, report }) {
   const animal = dog && state.lib.tags.find((t) => t.id === dog.parentId);
   assert(shiba && dog && dog.name === '犬' && animal && animal.name === '動物' && animal.parentId === null, 'hierarchy persisted');
   step('category hierarchy persisted: ' + [animal.name, dog.name, shiba.name].join(' > '));
+
+  // masked folders survive the relaunch, and the app starts masked (phase 1 quit with the mask off)
+  const masked = state.settings.maskedFolders || [];
+  assert(masked.length === 1 && maskEnabled(), `relaunch starts masked with the folder kept (${JSON.stringify(masked)}, enabled=${maskEnabled()})`);
+  const mroot = state.roots.find((r) => pathUnder(masked[0], r.path));
+  await sidebar.expandFolder(mroot.path);
+  await sleep(200);
+  assert(!document.querySelector(`.tree-row.folder[data-path="${CSS.escape(masked[0])}"]`), 'masked folder hidden after relaunch');
+  step('mask persisted: folder still marked, relaunch starts masked (hidden in the tree)');
 
   // keymap override from phase 1 survived the relaunch
   assert(bindings().get('graph.showRight') === 'Ctrl+Alt+P', 'override restored (' + bindings().get('graph.showRight') + ')');
@@ -986,6 +995,15 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   key({ key: 'm', code: 'KeyM', altKey: true });
   key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
   await waitFor(() => row() && !row().classList.contains('masked') && (state.settings.maskedFolders || []).length === 0, 3000, 'unmarked');
+  // for phase 2: leave the folder marked with the mask switched OFF; the relaunch must start masked
+  row().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await sleep(200);
+  wb.activate(galleryTabId);
+  key({ key: 'm', code: 'KeyM', altKey: true });
+  key({ key: 'M', code: 'KeyM', shiftKey: true, ctrlKey: true });
+  await waitFor(() => row() && row().classList.contains('masked') && !maskEnabled(), 3000, 'marked, mask off');
+  flushSettings();
+  report.maskedFolder = sub;
   await g.setSource({ kind: 'folder', path: root });
   step('mask: Alt+M hides tree row + folder tile, Ctrl+Shift+M shows (dimmed), Ctrl+Alt+Shift+M hides');
 

@@ -1,7 +1,9 @@
 // Folder mask: folders marked with Alt+M disappear from the sidebar tree and
 // from the gallery's folder tiles while the mask is on (Ctrl+Alt+Shift+M);
 // Ctrl+Shift+M shows everything again (marked folders are dimmed). Display only:
-// nothing on disk changes. Stored in settings (maskedFolders, maskEnabled).
+// nothing on disk changes. The marked folders are kept in settings
+// (maskedFolders → library.json, untouched by reinstalls); on/off is per run
+// and every launch starts masked.
 import { state, saveSettings, emit, on, normKey, samePath, remapUnder } from './state.js';
 import { isTrashed } from './ops.js';
 
@@ -9,8 +11,10 @@ function list() {
   return Array.isArray(state.settings.maskedFolders) ? state.settings.maskedFolders : [];
 }
 
+let enabled = true; // not persisted: the app always starts masked
+
 export function maskEnabled() {
-  return state.settings.maskEnabled !== false;
+  return enabled;
 }
 
 /** The folder is marked (whether or not the mask is currently on). */
@@ -41,8 +45,8 @@ export function toggleMask(p) {
 }
 
 export function setMaskEnabled(v) {
-  if (maskEnabled() === !!v) return;
-  saveSettings({ maskEnabled: !!v });
+  if (enabled === !!v) return;
+  enabled = !!v;
   emit('mask-changed');
 }
 
