@@ -1,10 +1,13 @@
 // Gallery pane (one per gallery tab): own folder, filters, sort, thumbnail
 // size, selection and scroll. Lazy thumbnails, inline rename, drag-out/move.
+// A single folder also shows its subfolders as tiles (click to enter, 戻る to go up).
 import {
   api, state, emit, on, saveSettings, setGlobalSelection, tagById, normKey, keyUnder, pathUnder,
   remapUnder, samePath, galleries, applyImageTags,
 } from './state.js';
-import { el, toast, toastError, showContextMenu, collator, thumbUrl, basename, debounce } from './ui.js';
+import { el, toast, toastError, showContextMenu, collator, thumbUrl, basename, dirname, debounce, isVideo } from './ui.js';
+import { openVideoPlayer, openThumbSceneDialog } from './video.js';
+import { isMasked } from './mask.js';
 import { tagChip, fillTagSelect } from './tags.js';
 import { filterMatcher } from './tag-tree.js';
 import { openScreenDialog } from './screen.js';
@@ -80,6 +83,9 @@ export class GalleryPane {
     this.focus = st.focus || null;
     this.anchor = this.focus;
     this.items = [];
+    this.subdirs = [];    // subfolders of a single-folder source
+    this.folderView = []; // subdirs shown as tiles (not masked, matching the search)
+    this.navAt = 0;
     this.itemsByPath = new Map();
     this.view = [];
     this.tileByPath = new Map();
@@ -102,6 +108,8 @@ export class GalleryPane {
       on('folder-renamed', ({ from, to }) => this.onFolderRenamed(from, to)),
       on('roots-changed', () => this.onRootsChanged()),
       on('paths-trashed', (trashed) => this.onTrashed(trashed)),
+      on('mask-changed', () => this.applyView({ keepScroll: true })),
+      on('video-thumb-changed', (p) => this.onVideoThumbChanged(p)),
     ];
     this.setThumbSize(this.thumbSize, false);
     this.renderTagFilter();
@@ -114,6 +122,7 @@ export class GalleryPane {
     this.el = el('div', { class: 'pane gallery-pane' });
     this.el.innerHTML = `
       <div class="toolbar">
+        <button class="btn icon gallery-back" title="一つ上のフォルダへ（Backspace / Alt+←）">←</button>
         <div class="title-block"><div class="gallery-title"></div><div class="gallery-count muted small"></div></div>
         <input class="input search" type="search" placeholder="ファイル名で検索" spellcheck="false">
         <label class="field-inline">並び順
@@ -138,6 +147,7 @@ export class GalleryPane {
         <div class="grid" tabindex="0"></div>
         <div class="empty-state"></div>
       </div>`;
+    this.backEl = q('.gallery-back');
     this.titleEl = q('.gallery-title');
     this.countEl = q('.gallery-count');
     this.searchEl = q('.search');
@@ -198,6 +208,7 @@ export class GalleryPane {
       this.changed();
     });
     this.sliderEl.addEventListener('input', () => this.setThumbSize(Number(this.sliderEl.value)));
+    this.backEl.addEventListener('click', () => this.goUp());
     this.el.querySelector('.refresh').addEventListener('click', () => {
       this.reload();
       emit('refresh-requested');
@@ -216,6 +227,8 @@ export class GalleryPane {
     });
     g.addEventListener('click', (e) => this._onClick(e));
     g.addEventListener('dblclick', (e) => {
+      // the first click of a double-click on a folder tile already entered it
+      if (performance.now() - this.navAt < 600) return;
       const i = this._tileIndex(e.target);
       if (i >= 0) this.ctx.openImage(this.view[i].path, { fromPane: this });
     });
@@ -235,23 +248,32 @@ export class GalleryPane {
 
     // drop target: move dragged images into this gallery's folder
     const wrap = this.gridWrap;
+    // …or onto a folder tile: into that subfolder
+    const folderTile = (e) => (e.target.closest ? e.target.closest('.tile.folder') : null);
     const accepts = (e) => e.dataTransfer.types.includes(DRAG_TYPE)
-      && sourceDirs(this.source).length === 1
-      && dragSource(e) !== String(this.id).toLowerCase();
+      && (folderTile(e) || (sourceDirs(this.source).length === 1 && dragSource(e) !== String(this.id).toLowerCase()));
+    const clearMarks = () => {
+      wrap.classList.remove('drop-target');
+      for (const t of this.grid.querySelectorAll('.tile.folder.drop-target')) t.classList.remove('drop-target');
+    };
     wrap.addEventListener('dragover', (e) => {
       if (!accepts(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      wrap.classList.add('drop-target');
+      const ft = folderTile(e);
+      clearMarks();
+      if (ft) ft.classList.add('drop-target');
+      else wrap.classList.add('drop-target');
     });
-    wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('drop-target'); });
+    wrap.addEventListener('dragleave', (e) => { if (!wrap.contains(e.relatedTarget)) clearMarks(); });
     wrap.addEventListener('drop', async (e) => {
-      wrap.classList.remove('drop-target');
+      clearMarks();
       if (!accepts(e)) return;
       e.preventDefault();
       e.stopPropagation();
       const paths = draggedPaths(e);
-      if (paths && paths.length) await moveInto(paths, this.source.path, { quietUnchanged: true });
+      const ft = folderTile(e);
+      if (paths && paths.length) await moveInto(paths, ft ? ft.dataset.dir : this.source.path, { quietUnchanged: true });
     });
   }
 
@@ -353,11 +375,15 @@ export class GalleryPane {
     const token = ++this.loadToken;
     const scroll = restoreScroll ? this.scrollTop : (preserve ? this.grid.scrollTop || this.scrollTop : 0);
     let items = [];
+    let subdirs = [];
     if (this.source) {
       if (!quiet) this._setEmpty('読み込み中…');
       try {
         if (this.source.kind === 'folder') {
-          const lists = await Promise.all(sourceDirs(this.source).map((d) => api.scan(d, this.includeSub)));
+          const dirs = sourceDirs(this.source);
+          const subsP = dirs.length === 1 ? api.subdirs(dirs[0]).catch(() => []) : Promise.resolve([]);
+          const lists = await Promise.all(dirs.map((d) => api.scan(d, this.includeSub)));
+          subdirs = await subsP;
           const seen = new Set();
           items = lists.flat().filter((it) => {
             const k = normKey(it.path);
@@ -374,6 +400,7 @@ export class GalleryPane {
     }
     if (token !== this.loadToken) return;
     this.items = items;
+    this.subdirs = subdirs;
     this.itemsByPath = new Map(items.map((it) => [it.path, it]));
     this.selection = new Set([...this.selection].filter((p) => this.itemsByPath.has(p)));
     if (this.focus && !this.itemsByPath.has(this.focus)) this.focus = null;
@@ -381,6 +408,7 @@ export class GalleryPane {
     this.loaded = true;
     this.titleEl.textContent = this.title();
     this.titleEl.title = sourceDirs(this.source).join('\n');
+    this._paintBack();
     this.applyView({ scrollTop: scroll });
     // keep the global selection in step when it came from this gallery
     const o = state.selection.origin;
@@ -393,6 +421,48 @@ export class GalleryPane {
       const src = normKey(d);
       return this.includeSub ? keyUnder(k, src) : k === src;
     });
+  }
+
+  // ---------- folder navigation ----------
+  /** Parent folder for 戻る, or null at a registered root / for other sources. */
+  parentDir() {
+    const dirs = sourceDirs(this.source);
+    if (dirs.length !== 1) return null;
+    const d = dirs[0];
+    if (state.roots.some((r) => samePath(r.path, d))) return null;
+    const up = dirname(d);
+    if (!up || samePath(up, d) || !state.roots.some((r) => pathUnder(up, r.path))) return null;
+    return up;
+  }
+
+  _paintBack() {
+    this.backEl.disabled = !this.parentDir();
+    this.backEl.classList.toggle('hidden', !this.source || this.source.kind !== 'folder' || sourceDirs(this.source).length !== 1);
+  }
+
+  /** Enter a subfolder (folder tile) or go up (戻る) in this tab. */
+  navigateTo(dir) {
+    this.navAt = performance.now();
+    saveSettings({ lastFolder: dir });
+    const p = this.setSource(folderSource([dir]));
+    this._paintBack();
+    emit('gallery-navigated', dir);
+    return p;
+  }
+
+  goUp() {
+    const up = this.parentDir();
+    if (up) this.navigateTo(up);
+  }
+
+  onVideoThumbChanged(p) {
+    const tile = this.tileByPath.get(p);
+    const it = this.itemsByPath.get(p);
+    if (!tile || !it) return;
+    const img = tile.querySelector('img');
+    img.classList.remove('broken');
+    img.dataset.src = thumbUrl(it);
+    if (img.getAttribute('src')) img.src = img.dataset.src;
   }
 
   onFsChanged(dirs) {
@@ -539,6 +609,7 @@ export class GalleryPane {
       return c * dir;
     });
     this.view = view;
+    this.folderView = this.subdirs.filter((d) => !isMasked(d.path) && (!q || d.name.toLowerCase().includes(q)));
     const st = keepScroll ? (this.grid.scrollTop || this.scrollTop) : scrollTop;
     this._renderGrid();
     if (st) {
@@ -570,6 +641,7 @@ export class GalleryPane {
     img.dataset.src = thumbUrl(it);
     img.addEventListener('error', () => img.classList.add('broken'), { once: true });
     const gif = (it.ext || '').toLowerCase() === '.gif';
+    const video = isVideo(it);
     if (gif) {
       img.crossOrigin = 'anonymous'; // readable by the canvas (freezeImage)
       img.addEventListener('load', () => freezeImage(img), { once: true });
@@ -582,7 +654,7 @@ export class GalleryPane {
     cap.textContent = it.name;
     cap.title = it.name;
     const tile = document.createElement('div');
-    tile.className = gif ? 'tile gif' : 'tile';
+    tile.className = gif ? 'tile gif' : video ? 'tile video' : 'tile';
     tile.draggable = true;
     tile.append(thumb, cap);
     tile._key = `${it.path}|${it.mtime}|${it.name}`;
@@ -595,16 +667,27 @@ export class GalleryPane {
    * whose file is unchanged are reused (their loaded thumbnails stay on
    * screen) and only new/changed files get new tiles.
    */
+  _makeFolderTile(d) {
+    const tile = el('div', { class: 'tile folder', title: d.path, dataset: { dir: d.path } },
+      el('div', { class: 'thumb' }, '📁'),
+      el('div', { class: 'cap' }, d.name));
+    tile.draggable = false;
+    return tile;
+  }
+
   _renderGrid() {
-    const keys = this.view.map((it) => `${it.path}|${it.mtime}|${it.name}`);
+    const fkeys = this.folderView.map((d) => `dir|${d.path}`);
+    const keys = [...fkeys, ...this.view.map((it) => `${it.path}|${it.mtime}|${it.name}`)];
     const sameView = this._keys && this._keys.length === keys.length && this._keys.every((k, i) => k === keys[i]);
     if (!sameView) {
       const old = this.tileByPath;
       this.tileByPath = new Map();
       const frag = document.createDocumentFragment();
+      for (const d of this.folderView) frag.append(this._makeFolderTile(d));
+      const off = fkeys.length;
       this.view.forEach((it, i) => {
         let tile = old.get(it.path);
-        if (tile && tile._key === keys[i]) old.delete(it.path);
+        if (tile && tile._key === keys[off + i]) old.delete(it.path);
         else tile = this._makeTile(it);
         tile.dataset.i = String(i);
         frag.append(tile);
@@ -619,6 +702,7 @@ export class GalleryPane {
     }
     this._paintSelection();
     if (!this.source) this._setEmpty('サイドバーでフォルダを選択してください。\nフォルダは「フォルダを追加」またはエクスプローラーからのドロップで登録できます。');
+    else if (this.folderView.length) this._setEmpty('');
     else if (!this.items.length) this._setEmpty(this.source.kind === 'tagged' ? 'タグ付けされた画像がありません。' : 'このフォルダには対応する画像がありません。');
     else if (!this.view.length) this._setEmpty('条件に一致する画像がありません。');
     else this._setEmpty('');
@@ -626,7 +710,7 @@ export class GalleryPane {
 
   // ---------- selection ----------
   _tileIndex(target) {
-    const tile = target && target.closest && target.closest('.tile');
+    const tile = target && target.closest && target.closest('.tile:not(.folder)');
     return tile ? Number(tile.dataset.i) : -1;
   }
 
@@ -708,6 +792,11 @@ export class GalleryPane {
   }
 
   _onClick(e) {
+    const ft = e.target.closest && e.target.closest('.tile.folder');
+    if (ft) {
+      if (e.detail <= 1) this.navigateTo(ft.dataset.dir);
+      return;
+    }
     const i = this._tileIndex(e.target);
     if (i < 0) {
       if (e.target === this.grid && !e.ctrlKey && !e.shiftKey) this.clearSelection();
@@ -723,6 +812,19 @@ export class GalleryPane {
       label: 'スクリーン表示を開始…',
       action: () => openScreenDialog(this.ctx, { folder: this.source && this.source.kind === 'folder' ? this.source.path : null }),
     };
+    const ft = e.target.closest && e.target.closest('.tile.folder');
+    if (ft) {
+      e.preventDefault();
+      const dir = ft.dataset.dir;
+      showContextMenu(e.clientX, e.clientY, [
+        { label: '開く', action: () => this.navigateTo(dir) },
+        { label: '新しいギャラリータブで開く', action: () => this.ctx.openFolder(dir, { newTab: true }) },
+        { label: 'エクスプローラーで表示', action: () => api.openPath(dir) },
+        { separator: true },
+        { label: 'スクリーン表示を開始…', action: () => openScreenDialog(this.ctx, { folder: dir }) },
+      ]);
+      return;
+    }
     if (i < 0) {
       if (!this.grid.contains(e.target)) return;
       e.preventDefault();
@@ -734,8 +836,11 @@ export class GalleryPane {
     if (!this.selection.has(it.path)) this.selectIndex(i);
     const paths = this.selectedPaths();
     const multi = paths.length > 1;
+    const video = isVideo(it);
     showContextMenu(e.clientX, e.clientY, [
-      { label: '開く', action: () => this.ctx.openImage(it.path, { fromPane: this }) },
+      video ? { label: '再生', action: () => openVideoPlayer(it) }
+        : { label: '開く', action: () => this.ctx.openImage(it.path, { fromPane: this }) },
+      video && !multi && { label: 'サムネイルのシーンを指定…', action: () => openThumbSceneDialog(it) },
       { label: '名前の変更', disabled: multi, action: () => this.startRename(it) },
       { label: multi ? `削除（ごみ箱へ・${paths.length}件）` : '削除（ごみ箱へ）', action: () => trashPaths(paths) },
       { separator: true },
@@ -767,6 +872,12 @@ export class GalleryPane {
       this.selectIndex(next, { range: e.shiftKey });
       this.scrollToPath(this.view[next].path);
     };
+    // 戻る: one folder up
+    if ((e.key === 'Backspace' && !e.ctrlKey && !e.altKey) || (e.key === 'ArrowLeft' && e.altKey && !e.ctrlKey)) {
+      e.preventDefault();
+      this.goUp();
+      return true;
+    }
     // Ctrl+A / F2 are keymap commands (selectAll(), rename()); only fixed context keys here
     if (e.ctrlKey || e.metaKey || e.altKey) return false;
     switch (e.key) {

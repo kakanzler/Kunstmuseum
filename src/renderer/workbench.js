@@ -1,8 +1,9 @@
 // Editor-group workbench: renders the LayoutModel (groups, tab bars, panes),
 // tab drag & drop, splitters, menus, image/folder opening and persistence.
 import { LayoutModel } from './layout-model.js';
-import { api, state, emit, on, saveSettings, isWin, samePath, remapUnder, pathUnder } from './state.js';
-import { el, showContextMenu, dirname } from './ui.js';
+import { api, state, emit, on, saveSettings, isWin, samePath, remapUnder, pathUnder, lookupItem } from './state.js';
+import { el, showContextMenu, dirname, basename, isVideo } from './ui.js';
+import { openVideoPlayer } from './video.js';
 import { keyLabel } from './commands.js';
 import { GalleryPane, defaultGalleryState } from './gallery.js';
 import { GraphPane } from './graph.js';
@@ -441,8 +442,12 @@ class Workbench {
     return tab;
   }
 
-  /** Opens (or focuses) a pinned image tab. */
+  /** Opens (or focuses) a pinned image tab. Videos open the player instead. */
   openImage(path, { fromPane = null, list = null } = {}) {
+    if (isVideo(path)) {
+      openVideoPlayer(lookupItem(path) || { path, name: basename(path) });
+      return null;
+    }
     const m = this.model;
     const existing = m.findImageTab(path);
     if (existing) {

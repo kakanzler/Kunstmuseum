@@ -10,10 +10,18 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const SUPPORTED_EXTS = Object.freeze([
+const IMAGE_EXTS = Object.freeze([
   '.jpg', '.jpeg', '.png', '.svg', '.gif', '.webp', '.avif', '.bmp', '.ico', '.apng',
 ]);
+// Videos Chromium can play; listed and tagged like images, played on demand.
+const VIDEO_EXTS = Object.freeze(['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.ogv']);
+const VIDEO_SET = new Set(VIDEO_EXTS);
+const SUPPORTED_EXTS = Object.freeze([...IMAGE_EXTS, ...VIDEO_EXTS]);
 const SUPPORTED_SET = new Set(SUPPORTED_EXTS);
+const VIDEO_TYPES = {
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mkv': 'video/x-matroska', '.ogv': 'video/ogg',
+};
 // Formats that must be served as the original file (animation / vector).
 const PASSTHROUGH_EXTS = new Set(['.gif', '.apng', '.svg', '.ico']);
 
@@ -38,6 +46,38 @@ function extOf(p) {
 
 function isSupported(p) {
   return SUPPORTED_SET.has(extOf(p));
+}
+
+function isVideo(p) {
+  return VIDEO_SET.has(extOf(p));
+}
+
+function videoType(p) {
+  return VIDEO_TYPES[extOf(p)] || 'application/octet-stream';
+}
+
+/**
+ * Parse an HTTP `Range` header against a file of `size` bytes.
+ * @returns {{start:number,end:number}|null} inclusive byte range, or null when
+ *   absent/unsupported (serve the whole file); {invalid:true} when unsatisfiable.
+ */
+function parseRange(header, size) {
+  if (!header || typeof header !== 'string') return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (m[1] === '' && m[2] === '')) return null; // multi-range / malformed: whole file
+  let start;
+  let end;
+  if (m[1] === '') {
+    const n = Number(m[2]); // suffix: the last n bytes
+    if (n === 0) return { invalid: true };
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? size - 1 : Math.min(Number(m[2]), size - 1);
+  }
+  if (start >= size || start > end) return { invalid: true };
+  return { start, end };
 }
 
 function normKey(p, win = IS_WIN) {
@@ -370,10 +410,15 @@ function describeError(e) {
 
 module.exports = {
   SUPPORTED_EXTS,
+  IMAGE_EXTS,
+  VIDEO_EXTS,
   PASSTHROUGH_EXTS,
   FsOpError,
   extOf,
   isSupported,
+  isVideo,
+  videoType,
+  parseRange,
   normKey,
   samePath,
   isInside,

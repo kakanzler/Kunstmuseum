@@ -12,6 +12,8 @@ import { toggleSettings, isSettingsOpen } from './settings.js';
 import { openQuickOpen, isQuickOpenOpen } from './quickopen.js';
 import { openBulkEditor } from './bulk.js';
 import { initFetchPanel, toggleFetchPanel } from './fetcher.js';
+import { initVideoFrames, isPlayerOpen } from './video.js';
+import { initMask, setMaskEnabled } from './mask.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -76,7 +78,7 @@ function initResizers() {
  * Enter, viewer 1/0, …) are handled by the tree / the active pane.
  */
 function onKeyDown(e) {
-  if (isScreenActive()) return; // the slideshow owns the keyboard (capture listener)
+  if (isScreenActive() || isPlayerOpen()) return; // the slideshow / player owns the keyboard (capture listener)
   const id = commandForEvent(e);
   if (isSettingsOpen()) {
     if (id === 'settings.open') { e.preventDefault(); toggleSettings(settingsCtx); }
@@ -106,6 +108,9 @@ function registerAllCommands() {
     'screen.open': () => openScreenDialog(wb),
     'settings.open': () => toggleSettings(settingsCtx),
     'fetch.toggle': () => toggleFetchPanel(),
+    'tree.mask': () => sidebar.maskFocused(),
+    'tree.unmaskAll': () => { setMaskEnabled(false); toast('マスクを解除しました（すべて表示）。', 'info', 1800); },
+    'tree.maskOn': () => { setMaskEnabled(true); toast('マスク状態にしました。', 'info', 1800); },
     'tab.close': () => wb.closeActive(),
     'tab.splitRight': () => wb.splitActive('right'),
     'tab.next': () => wb.cycle(1),
@@ -169,6 +174,8 @@ async function boot() {
   }
   const savedLayout = state.settings.layout ? JSON.parse(JSON.stringify(state.settings.layout)) : null;
 
+  initVideoFrames();
+  initMask();
   initKeymap();
   registerAllCommands();
   renderHint();

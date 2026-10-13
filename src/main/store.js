@@ -37,6 +37,12 @@ function cleanView(v) {
   return { scale: clamp(v.scale, 0.05, 20), cx: clamp(v.cx, 0, 1), cy: clamp(v.cy, 0, 1) };
 }
 
+/** A positive, finite scene time in seconds (millisecond precision), or 0. */
+function cleanThumbTime(t) {
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 1000) / 1000 : 0;
+}
+
 function newId(prefix) {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
 }
@@ -102,6 +108,7 @@ class Store {
       tags: [],
       images: {},
       views: {},   // normalized image path → saved viewer zoom {scale, cx, cy}
+      videoThumbs: {}, // normalized video path → thumbnail scene (seconds)
     };
   }
 
@@ -141,6 +148,7 @@ class Store {
       tags: [],
       images: {},
       views: {},
+      videoThumbs: {},
     };
     if (!out.tagTypes.length) out.tagTypes = def.tagTypes;
     const typeIds = new Set(out.tagTypes.map((t) => t.id));
@@ -183,6 +191,12 @@ class Store {
       for (const [k, v] of Object.entries(d.views)) {
         const view = cleanView(v);
         if (view) out.views[this.norm(k)] = view;
+      }
+    }
+    if (d.videoThumbs && typeof d.videoThumbs === 'object') {
+      for (const [k, v] of Object.entries(d.videoThumbs)) {
+        const t = cleanThumbTime(v);
+        if (t) out.videoThumbs[this.norm(k)] = t;
       }
     }
     return out;
@@ -626,6 +640,12 @@ class Store {
       delete this.data.views[k];
       this.data.views[this.norm(remap(k))] = v;
     }
+    for (const k of Object.keys(this.data.videoThumbs)) {
+      if (!this.isInside(od, k)) continue;
+      const v = this.data.videoThumbs[k];
+      delete this.data.videoThumbs[k];
+      this.data.videoThumbs[this.norm(remap(k))] = v;
+    }
     this.data.roots = this.data.roots.map((r) => (this.isInside(od, r) ? remap(r) : r));
     const lf = this.data.settings.lastFolder;
     if (lf && this.isInside(od, lf)) this.data.settings.lastFolder = remap(lf);
@@ -649,13 +669,34 @@ class Store {
     this.save();
   }
 
+  /** Per-file viewer state (zoom, video thumbnail scene) follows a rename/move. */
   _moveView(from, to) {
     const fk = this.norm(from);
-    const v = this.data.views[fk];
-    if (!v) return false;
-    delete this.data.views[fk];
-    this.data.views[this.norm(to)] = v;
-    return true;
+    const tk = this.norm(to);
+    let moved = false;
+    for (const map of [this.data.views, this.data.videoThumbs]) {
+      const v = map[fk];
+      if (v === undefined) continue;
+      delete map[fk];
+      map[tk] = v;
+      moved = true;
+    }
+    return moved;
+  }
+
+  // ---------- video thumbnail scene ----------
+  /** Seconds into the video used for its thumbnail (0 = the first frame). */
+  getVideoThumbTime(p) {
+    return this.data.videoThumbs[this.norm(p)] || 0;
+  }
+
+  setVideoThumbTime(p, t) {
+    const k = this.norm(p);
+    const v = cleanThumbTime(t);
+    if (v) this.data.videoThumbs[k] = v;
+    else if (k in this.data.videoThumbs) delete this.data.videoThumbs[k];
+    else return;
+    this.save();
   }
 
   /**
@@ -686,6 +727,11 @@ class Store {
     for (const k of Object.keys(this.data.views)) {
       if (!missing(k)) continue;
       delete this.data.views[k];
+      views++;
+    }
+    for (const k of Object.keys(this.data.videoThumbs)) {
+      if (!missing(k)) continue;
+      delete this.data.videoThumbs[k];
       views++;
     }
     if (removed || views) this.save();

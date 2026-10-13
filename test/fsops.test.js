@@ -172,3 +172,30 @@ test('moveFiles reports missing sources as errors without throwing', async () =>
   assert.equal(r.errors.length, 1);
   assert.equal(r.moved.length, 0);
 });
+
+test('videos are listed alongside images and recognised by isVideo', async () => {
+  write(path.join(dir, 'a.png'));
+  write(path.join(dir, 'clip.MP4'));
+  write(path.join(dir, 'b.webm'));
+  write(path.join(dir, 'c.avi')); // not playable in Chromium: not listed
+  const flat = await fsops.scanFolder(dir, { recursive: false });
+  assert.deepEqual(flat.map((f) => f.name).sort(), ['a.png', 'b.webm', 'clip.MP4']);
+  assert.equal(fsops.isVideo('x/clip.MP4'), true);
+  assert.equal(fsops.isVideo('x/a.png'), false);
+  assert.equal(fsops.videoType('a.webm'), 'video/webm');
+  assert.equal(fsops.videoType('a.mov'), 'video/quicktime');
+});
+
+test('parseRange: whole, open-ended, bounded, suffix and unsatisfiable ranges', () => {
+  assert.equal(fsops.parseRange(null, 100), null);
+  assert.equal(fsops.parseRange('bytes=0-1,5-9', 100), null); // multi-range: whole file
+  assert.equal(fsops.parseRange('items=0-1', 100), null);
+  assert.deepEqual(fsops.parseRange('bytes=0-', 100), { start: 0, end: 99 });
+  assert.deepEqual(fsops.parseRange('bytes=10-19', 100), { start: 10, end: 19 });
+  assert.deepEqual(fsops.parseRange('bytes=90-500', 100), { start: 90, end: 99 });
+  assert.deepEqual(fsops.parseRange('bytes=-30', 100), { start: 70, end: 99 });
+  assert.deepEqual(fsops.parseRange('bytes=-300', 100), { start: 0, end: 99 });
+  assert.deepEqual(fsops.parseRange('bytes=100-', 100), { invalid: true });
+  assert.deepEqual(fsops.parseRange('bytes=20-10', 100), { invalid: true });
+  assert.deepEqual(fsops.parseRange('bytes=-0', 100), { invalid: true });
+});

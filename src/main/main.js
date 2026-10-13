@@ -2,6 +2,8 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, Menu, protocol, net, nativeImage, ipcMain, dialog, shell, clipboard, screen, powerSaveBlocker,
@@ -122,7 +124,32 @@ function resolveRequestPath(url) {
   return p;
 }
 
-async function serveFile(p) {
+/** Videos: byte ranges straight from disk (the <video> element seeks with them). */
+async function serveVideo(p, request) {
+  let st;
+  try {
+    st = await fsp.stat(p);
+  } catch {
+    return new Response('Not found', { status: 404, headers: CORS });
+  }
+  const headers = {
+    'content-type': fsops.videoType(p), 'accept-ranges': 'bytes', ...CORS,
+    'access-control-expose-headers': 'content-range, content-length, accept-ranges',
+  };
+  const r = fsops.parseRange(request.headers.get('range'), st.size);
+  if (r && r.invalid) {
+    return new Response(null, { status: 416, headers: { ...headers, 'content-range': `bytes */${st.size}` } });
+  }
+  const start = r ? r.start : 0;
+  const end = r ? r.end : st.size - 1;
+  const body = st.size ? Readable.toWeb(fs.createReadStream(p, { start, end })) : null;
+  headers['content-length'] = String(st.size ? end - start + 1 : 0);
+  if (r) headers['content-range'] = `bytes ${start}-${end}/${st.size}`;
+  return new Response(body, { status: r ? 206 : 200, headers });
+}
+
+async function serveFile(p, request) {
+  if (fsops.isVideo(p)) return serveVideo(p, request);
   const res = await net.fetch(pathToFileURL(p).toString());
   if (!res.ok) return new Response('Not found', { status: 404, headers: CORS });
   const headers = new Headers(res.headers);
@@ -131,8 +158,103 @@ async function serveFile(p) {
   return new Response(res.body, { status: 200, headers });
 }
 
+// ---- video thumbnails: a frame grabbed by the renderer (main has no decoder),
+// kept on disk under userData/video-thumbs so it survives restarts ----
+const VTHUMB_TIMEOUT_MS = 20000;
+const vthumbPending = new Map(); // request id → {resolve, reject, timer}
+let vthumbSeq = 0;
+let vthumbActive = 0;
+const vthumbQueue = [];
+
+function vthumbLimit(fn) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      vthumbActive++;
+      Promise.resolve().then(fn).then(resolve, reject).finally(() => {
+        vthumbActive--;
+        const next = vthumbQueue.shift();
+        if (next) next();
+      });
+    };
+    if (vthumbActive < 2) run();
+    else vthumbQueue.push(run);
+  });
+}
+
+function vthumbDir() {
+  return path.join(app.getPath('userData'), 'video-thumbs');
+}
+
+/** Ask the renderer for the frame at `time` (seconds) as JPEG bytes. */
+function requestVideoFrame(p, time) {
+  return new Promise((resolve, reject) => {
+    if (!mainWindow || mainWindow.isDestroyed()) { reject(new Error('no window')); return; }
+    const id = ++vthumbSeq;
+    const timer = setTimeout(() => {
+      vthumbPending.delete(id);
+      reject(new Error('video frame timeout'));
+    }, VTHUMB_TIMEOUT_MS);
+    vthumbPending.set(id, { resolve, reject, timer });
+    mainWindow.webContents.send('vthumb:request', { id, path: p, time });
+  });
+}
+
+function onVideoFrameReply(_ev, msg) {
+  const e = msg && vthumbPending.get(msg.id);
+  if (!e) return;
+  vthumbPending.delete(msg.id);
+  clearTimeout(e.timer);
+  if (msg.data && msg.data.byteLength) e.resolve(Buffer.from(msg.data));
+  else e.reject(new Error(msg.error || 'no frame'));
+}
+
+async function videoThumb(p, st) {
+  const time = store.getVideoThumbTime(p);
+  const key = `${fsops.normKey(p)}|${st.mtimeMs}|${st.size}|${time}`;
+  const file = path.join(vthumbDir(), `${crypto.createHash('sha1').update(key).digest('hex')}.jpg`);
+  let buf = cacheGet(key);
+  if (buf) return buf;
+  let pending = thumbInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      try {
+        return await fsp.readFile(file);
+      } catch { /* not cached yet */ }
+      let out;
+      try {
+        out = await vthumbLimit(() => requestVideoFrame(p, time));
+      } catch {
+        // renderer could not decode it: the shell thumbnail (Explorer's) is better than nothing
+        const img = await nativeImage.createThumbnailFromPath(p, { width: 320, height: 320 });
+        if (!img || img.isEmpty()) throw new Error('empty thumbnail');
+        return img.toPNG(); // not written to disk: retried next session
+      }
+      await fsp.mkdir(vthumbDir(), { recursive: true });
+      await fsp.writeFile(file, out).catch(() => {});
+      return out;
+    })().finally(() => thumbInflight.delete(key));
+    thumbInflight.set(key, pending);
+  }
+  buf = await pending;
+  cacheSet(key, buf);
+  return buf;
+}
+
+/** JPEG or PNG magic → content type. */
+function imageType(buf) {
+  return buf[0] === 0xff && buf[1] === 0xd8 ? 'image/jpeg' : 'image/png';
+}
+
 async function serveThumb(p) {
   const ext = fsops.extOf(p);
+  if (fsops.isVideo(p)) {
+    try {
+      const buf = await videoThumb(p, await fsp.stat(p));
+      return new Response(buf, { status: 200, headers: { 'content-type': imageType(buf), ...CORS } });
+    } catch {
+      return new Response('Not found', { status: 404, headers: CORS });
+    }
+  }
   // GIF thumbnails are rendered still (shell thumbnail = first frame)
   if (ext !== '.gif' && fsops.PASSTHROUGH_EXTS.has(ext)) return serveFile(p);
   let st;
@@ -169,7 +291,11 @@ function registerProtocol() {
       const url = new URL(request.url);
       const p = resolveRequestPath(url);
       if (!p) return forbidden();
-      if (url.hostname === 'file') return await serveFile(p);
+      if (request.method === 'OPTIONS') {
+        // CORS preflight (e.g. a fetch with a Range header)
+        return new Response(null, { status: 204, headers: { ...CORS, 'access-control-allow-headers': 'range', 'access-control-allow-methods': 'GET, HEAD' } });
+      }
+      if (url.hostname === 'file') return await serveFile(p, request);
       if (url.hostname === 'thumb') return await serveThumb(p);
       return forbidden();
     } catch (e) {
@@ -431,6 +557,9 @@ function registerIpc() {
   handle('lib:get', () => libSnapshot());
   handle('images:getView', (p) => store.getImageView(assertInRoots(p, 'ファイル')));
   handle('images:setView', (p, v) => { store.setImageView(assertInRoots(p, 'ファイル'), v); return true; });
+  handle('videos:getThumbTime', (p) => store.getVideoThumbTime(assertInRoots(p, 'ファイル')));
+  handle('videos:setThumbTime', (p, t) => { store.setVideoThumbTime(assertInRoots(p, 'ファイル'), t); return true; });
+  ipcMain.on('vthumb:reply', onVideoFrameReply);
   handle('lib:addType', (t) => { store.addTagType(t || {}); return libSnapshot(); });
   handle('lib:updateType', (id, t) => { store.updateTagType(id, t || {}); return libSnapshot(); });
   handle('lib:deleteType', (id, reassignTo) => { store.deleteTagType(id, reassignTo); return libSnapshot(); });
@@ -509,6 +638,16 @@ function registerIpc() {
         throw new Error('smoke:copyFixture is limited to the smoke fixture folder');
       }
       await fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL);
+      return to;
+    });
+    // smoke only: write a NEW file (e.g. a recorded .webm) into the fixture folder; never overwrites
+    handle('smoke:writeFixture', async (folder, newName, bytes) => {
+      const dir = path.resolve(process.env.KM_SMOKE_DIR);
+      const to = path.join(path.resolve(String(folder)), String(newName));
+      if (!fsops.isInside(dir, to) || !/^km-smoke-added-/.test(path.basename(to))) {
+        throw new Error('smoke:writeFixture is limited to the smoke fixture folder');
+      }
+      await fsp.writeFile(to, Buffer.from(bytes), { flag: 'wx' });
       return to;
     });
   }

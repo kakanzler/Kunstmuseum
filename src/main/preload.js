@@ -62,6 +62,21 @@ contextBridge.exposeInMainWorld('api', {
   removeImageTags: call('images:removeTags'),
   getImageView: call('images:getView'),
   setImageView: call('images:setView'),
+  getVideoThumbTime: call('videos:getThumbTime'),
+  setVideoThumbTime: call('videos:setThumbTime'),
+  // main asks for a video frame: handler({path, time}) → Promise<ArrayBuffer>
+  onVideoFrameRequest: (handler) => {
+    const fn = async (_e, req) => {
+      try {
+        const data = await handler({ path: req.path, time: req.time });
+        ipcRenderer.send('vthumb:reply', { id: req.id, data: new Uint8Array(data) });
+      } catch (err) {
+        ipcRenderer.send('vthumb:reply', { id: req.id, error: String((err && err.message) || err) });
+      }
+    };
+    ipcRenderer.on('vthumb:request', fn);
+    return () => ipcRenderer.removeListener('vthumb:request', fn);
+  },
   graphData: call('graph:data'),
 
   getPathForFile: (file) => {
@@ -89,5 +104,6 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   smokeCopyFixture: call('smoke:copyFixture'), // only registered in smoke mode
+  smokeWriteFixture: call('smoke:writeFixture'), // only registered in smoke mode
   smokeReport: (report) => ipcRenderer.send('smoke:report', report),
 });

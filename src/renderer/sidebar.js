@@ -6,7 +6,7 @@ import {
   api, state, on, emit, saveSettings, normKey, keyUnder, samePath, remapUnder, galleries,
   setGlobalSelection, registerItemLookup,
 } from './state.js';
-import { el, toast, toastError, showContextMenu, confirmDialog, basename, dirname, extname } from './ui.js';
+import { el, toast, toastError, showContextMenu, confirmDialog, basename, dirname, extname, isVideo } from './ui.js';
 import {
   DRAG_TYPE, draggedPaths, moveInto, startPathsDrag, checkFileName, renameFileTo, renameFolderTo, splitName,
   trashPaths, isTrashed,
@@ -14,6 +14,9 @@ import {
 import { openBulkEditor } from './bulk.js';
 import { openScreenDialog } from './screen.js';
 import { sourceDirs, folderSource } from './gallery.js';
+import { isMasked, isMarked, maskEnabled, toggleMask } from './mask.js';
+import { openVideoPlayer, openThumbSceneDialog } from './video.js';
+import { keyLabel } from './commands.js';
 
 const PAGE = 500;
 const $ = (id) => document.getElementById(id);
@@ -33,6 +36,7 @@ let renaming = false;
 const BADGE_COLORS = {
   '.jpg': '#c98a5a', '.jpeg': '#c98a5a', '.png': '#6fa8dc', '.apng': '#5fb3b3', '.gif': '#b48ead',
   '.webp': '#8fbf7f', '.avif': '#d08770', '.svg': '#e0b44f', '.bmp': '#8a8f98', '.ico': '#a3a3c2',
+  '.mp4': '#d0606a', '.m4v': '#d0606a', '.webm': '#c0607a', '.mov': '#b8607a', '.mkv': '#a8608a', '.ogv': '#a8608a',
 };
 
 function showFiles() {
@@ -100,6 +104,9 @@ export function initSidebar(context) {
   on('folder-renamed', ({ from, to }) => afterFolderRenamed(from, to));
   on('paths-trashed', (trashed) => afterTrashed(trashed));
   on('roots-changed', () => renderTree());
+  on('mask-changed', () => renderTree());
+  // folder tile / 戻る in a gallery: follow it in the tree
+  on('gallery-navigated', (dir) => { revealPath(dir).then(() => paint()); });
   on('layout-changed', () => paint());
   on('active-pane-changed', () => paint());
   on('global-selection', (s) => {
@@ -245,7 +252,7 @@ export async function revealPath(p) {
     const c = cache.get(key) || await loadDir(cur);
     expanded.add(key);
     const next = c.dirs.find((d) => keyUnder(target, normKey(d.path)));
-    if (!next) break;
+    if (!next || isMasked(next.path)) break; // a masked folder stays hidden
     cur = next.path;
   }
   renderTree();
@@ -260,7 +267,9 @@ export function renderTree() {
   frag.append(rowEl({ type: 'special', name: '全フォルダ（タグ付き画像）', depth: 0 }));
   frag.append(el('div', { class: 'tree-sep' }));
   if (!state.roots.length) frag.append(el('div', { class: 'tree-empty' }, 'フォルダが登録されていません。'));
-  for (const r of state.roots) appendFolder(frag, { path: r.path, name: r.name, isRoot: true, exists: r.exists }, 0);
+  for (const r of state.roots) {
+    if (!isMasked(r.path)) appendFolder(frag, { path: r.path, name: r.name, isRoot: true, exists: r.exists }, 0);
+  }
   tree.replaceChildren(frag);
   paint();
 }
@@ -276,7 +285,9 @@ function appendFolder(frag, node, depth) {
   rows.push(row);
   frag.append(rowEl(row));
   if (!open) return;
-  for (const d of c.dirs) appendFolder(frag, { ...d, isRoot: false, exists: true }, depth + 1);
+  for (const d of c.dirs) {
+    if (!isMasked(d.path)) appendFolder(frag, { ...d, isRoot: false, exists: true }, depth + 1);
+  }
   if (!showFiles()) return;
   const limit = shown.get(key) || PAGE;
   for (const f of c.files.slice(0, limit)) {
@@ -316,7 +327,7 @@ function rowEl(r) {
     return e;
   }
   const e = el('div', {
-    class: `tree-row folder${r.exists === false ? ' missing' : ''}`,
+    class: `tree-row folder${r.exists === false ? ' missing' : ''}${!maskEnabled() && isMarked(r.path) ? ' masked' : ''}`,
     style: pad, title: r.path,
     dataset: { type: 'folder', path: r.path, root: r.isRoot ? '1' : '', exists: r.exists === false ? '0' : '1' },
   },
@@ -463,7 +474,12 @@ function onContextMenu(e) {
   if (type === 'file') {
     if (!sel.has(path)) clickFile(path, row.dataset.parent, {});
     const paths = [...sel];
+    const item = { path, name: basename(path) };
+    const video = isVideo(path) && paths.length === 1;
     showContextMenu(e.clientX, e.clientY, [
+      video && { label: '再生', action: () => openVideoPlayer(item) },
+      video && { label: 'サムネイルのシーンを指定…', action: () => openThumbSceneDialog(item) },
+      video && { separator: true },
       { label: '名前の変更', disabled: paths.length > 1, action: () => startRename(path) },
       { label: '新しいタブで開く', action: () => ctx.openImage(path, { list: filesOf(row.dataset.parent) }) },
       { label: paths.length > 1 ? `削除（ごみ箱へ・${paths.length}件）` : '削除（ごみ箱へ）', action: () => trashPaths(paths) },
@@ -661,6 +677,34 @@ export function handleKey(e) {
 export function focusedFolder() {
   const cur = rows.find((r) => r.path === focusPath);
   return cur && cur.type === 'folder' && cur.exists !== false ? cur.path : null;
+}
+
+/**
+ * フォルダをマスク (Alt+M): mark/unmark the focused folder. While the mask is
+ * on it disappears, so the focus moves to the row that takes its place.
+ */
+export function maskFocused() {
+  const list = navRows();
+  const i = list.findIndex((r) => r.path === focusPath);
+  const cur = list[i];
+  if (!cur || cur.type !== 'folder') {
+    toast('ツリーでフォルダを選択してください。', 'error');
+    return;
+  }
+  const marked = toggleMask(cur.path);
+  if (marked && maskEnabled()) {
+    // next row outside the hidden subtree, else the one above
+    const after = list.slice(i + 1).find((r) => r.depth <= cur.depth);
+    const next = after || list[i - 1];
+    focusPath = next ? next.path : null;
+    paint();
+    if (focusPath) scrollToRow(focusPath);
+  }
+  if (marked) {
+    toast(maskEnabled() ? `「${cur.name}」をマスクしました（${keyLabel('tree.unmaskAll')} ですべて表示）。`
+      : `「${cur.name}」をマスク対象にしました（${keyLabel('tree.maskOn')} で非表示）。`, 'info', 2500);
+  }
+  else toast(`「${cur.name}」のマスクを外しました。`, 'info', 2000);
 }
 
 /** 名前の変更 command while the tree has focus: inline rename of the focused row. */

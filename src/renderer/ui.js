@@ -226,8 +226,25 @@ export function extname(name) {
 export function fileUrl(item) {
   return `kmimg://file/${encodeURIComponent(item.path)}${item.mtime ? `?v=${Math.round(item.mtime)}` : ''}`;
 }
+// bumped when a video's thumbnail scene changes, so cached <img>s reload
+const thumbBust = new Map(); // path → n
+export function bumpThumb(path) {
+  thumbBust.set(path, (thumbBust.get(path) || 0) + 1);
+}
 export function thumbUrl(item) {
-  return `kmimg://thumb/${encodeURIComponent(item.path)}${item.mtime ? `?v=${Math.round(item.mtime)}` : ''}`;
+  const q = [];
+  if (item.mtime) q.push(`v=${Math.round(item.mtime)}`);
+  if (thumbBust.has(item.path)) q.push(`r=${thumbBust.get(item.path)}`);
+  return `kmimg://thumb/${encodeURIComponent(item.path)}${q.length ? `?${q.join('&')}` : ''}`;
+}
+
+export const VIDEO_EXTS = new Set(['.mp4', '.m4v', '.webm', '.mov', '.mkv', '.ogv']);
+/** item ({path, ext?}) or a path string is a video file. */
+export function isVideo(item) {
+  if (!item) return false;
+  const p = typeof item === 'string' ? item : (item.ext || item.path || '');
+  const i = p.lastIndexOf('.');
+  return i >= 0 && VIDEO_EXTS.has(p.slice(i).toLowerCase());
 }
 
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;

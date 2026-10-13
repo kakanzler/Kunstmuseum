@@ -2,7 +2,7 @@
 // Two stacked layers crossfade; the next image is always preloaded and
 // decoded before it is shown, so slides never flash. Broken files are skipped.
 import { api, state, saveSettings, setGlobalSelection, normKey, pathUnder } from './state.js';
-import { el, openModal, toast, toastError, fileUrl, basename } from './ui.js';
+import { el, openModal, toast, toastError, fileUrl, basename, isVideo } from './ui.js';
 import { fillTagSelect } from './tags.js';
 import { expandWithDescendants } from './tag-tree.js';
 import { Playlist } from './playlist.js';
@@ -161,6 +161,7 @@ export async function openScreenDialog(wb, { folder = null } = {}) {
         toastError(e, '画像を読み込めませんでした。');
         return;
       }
+      items = items.filter((it) => !isVideo(it)); // the slideshow shows images only
       const opts = { target, folder: folderSel.value || d.folder, includeSub: includeSub.checked, tagId: tagSel.value || d.tagId, interval: sec, order: order.value, loop: loop.checked,
         fromSelection: fromSel.disabled ? d.fromSelection : fromSel.checked };
       saveSettings({ screen: opts });

@@ -4,8 +4,10 @@
 // 1 → 100%, double-click toggles 100% ⇔ fit, HUD with the zoom level.
 // With `persistView` the zoom of each image is remembered (library.json) and
 // restored when it is shown again; fit forgets it.
-import { el, fileUrl } from './ui.js';
-import { api } from './state.js';
+// Videos show their still thumbnail; right-click offers 再生 (the player overlay).
+import { el, fileUrl, thumbUrl, isVideo, showContextMenu } from './ui.js';
+import { openVideoPlayer, openThumbSceneDialog } from './video.js';
+import { api, on } from './state.js';
 import { keyLabel } from './commands.js';
 
 const MIN_SCALE = 0.05;
@@ -46,10 +48,15 @@ export class ImageViewer {
     this.msg = el('div', { class: 'iv-msg' }, opts.emptyText || '');
     this.stage = el('div', { class: 'iv-stage' }, this.img, this.msg);
     this.hud = el('div', { class: 'iv-hud' }, '');
-    this.el = el('div', { class: 'iv' }, this.bar, this.stage, this.hud);
+    this.videoBadge = el('div', { class: 'iv-video-badge hidden' }, '▶ 動画 — 右クリックで再生');
+    this.el = el('div', { class: 'iv' }, this.bar, this.stage, this.hud, this.videoBadge);
     this.img.style.visibility = 'hidden';
 
     this._bind();
+    // a new thumbnail scene: reload the still of the video on screen
+    this.offThumb = on('video-thumb-changed', (p) => {
+      if (this.item && this.item.path === p) this.setItem(this.item, this.pos);
+    });
   }
 
   _bind() {
@@ -86,6 +93,15 @@ export class ImageViewer {
       window.addEventListener('mouseup', up);
     });
     this.stage.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+    this.stage.addEventListener('contextmenu', (e) => {
+      const it = this.item;
+      if (!it || !isVideo(it)) return;
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: '再生', action: () => openVideoPlayer(it) },
+        { label: 'サムネイルのシーンを指定…', action: () => openThumbSceneDialog(it) },
+      ]);
+    });
     this.stage.addEventListener('dblclick', (e) => {
       if (!this.natW) return;
       const r = this.stage.getBoundingClientRect();
@@ -103,6 +119,7 @@ export class ImageViewer {
 
   dispose() {
     this.ro.disconnect();
+    this.offThumb();
     this.token++;
     this._flushSave();
   }
@@ -115,6 +132,7 @@ export class ImageViewer {
     this.natW = 0;
     this.img.removeAttribute('src');
     this.img.style.visibility = 'hidden';
+    this.videoBadge.classList.add('hidden');
     this.nameEl.textContent = '';
     this.posEl.textContent = '';
     this.msg.textContent = text || this.opts.emptyText || '';
@@ -134,17 +152,20 @@ export class ImageViewer {
     this.setPosition(pos);
     this.nameEl.textContent = item.name;
     this.nameEl.title = item.path;
-    const same = this.item && this.item.path === item.path && (this.item.mtime || 0) === (item.mtime || 0) && this.natW;
+    const video = isVideo(item);
+    const url = video ? thumbUrl(item) : fileUrl(item); // a video shows its still thumbnail
+    this.videoBadge.classList.toggle('hidden', !video);
+    const same = this.item && this.item.path === item.path && (this.item.mtime || 0) === (item.mtime || 0) && this.natW
+      && (!video || this.img.getAttribute('src') === url);
     if (!same) this._flushSave();
     this.item = item;
     if (same) return Promise.resolve();
     const token = ++this.token;
     const isSvg = (item.ext || item.name.slice(item.name.lastIndexOf('.'))).toLowerCase() === '.svg';
-    const url = fileUrl(item);
     const probe = new Image();
     probe.decoding = 'async';
     probe.src = url;
-    const view = this.opts.persistView ? api.getImageView(item.path).catch(() => null) : Promise.resolve(null);
+    const view = this.opts.persistView && !video ? api.getImageView(item.path).catch(() => null) : Promise.resolve(null);
     return Promise.all([probe.decode(), view]).then(([, saved]) => {
       if (token !== this.token) return;
       let w = probe.naturalWidth || 0;
@@ -175,6 +196,7 @@ export class ImageViewer {
   }
 
   setPosition(pos) {
+    this.pos = pos;
     const has = pos && pos.total > 0 && pos.index >= 0;
     this.posEl.textContent = has ? `${pos.index + 1} / ${pos.total}` : '';
     const nav = !!this.opts.onNavigate && has && pos.total > 1;
@@ -251,7 +273,7 @@ export class ImageViewer {
   }
 
   _saveLater() {
-    if (!this.opts.persistView || !this.item || !this.natW) return;
+    if (!this.opts.persistView || !this.item || !this.natW || isVideo(this.item)) return;
     const path = this.item.path;
     if (this.pendingSave) clearTimeout(this.pendingSave.timer);
     this.pendingSave = { path, timer: setTimeout(() => this._flushSave(), SAVE_DELAY) };

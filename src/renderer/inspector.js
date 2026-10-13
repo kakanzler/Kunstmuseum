@@ -3,7 +3,8 @@
 // selection); the preview image is swapped only after the next thumbnail has
 // been decoded offscreen, so it never blinks.
 import { api, state, on, lookupItem } from './state.js';
-import { el, toast, toastError, formatBytes, formatDate, thumbUrl, fileUrl, basename } from './ui.js';
+import { el, toast, toastError, formatBytes, formatDate, thumbUrl, fileUrl, basename, isVideo } from './ui.js';
+import { videoInfo, formatDuration } from './video.js';
 import { tagChip, createTagInput, addTagsToPaths, removeTagsFromPaths, sortedTags } from './tags.js';
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +24,7 @@ export function initInspector(context) {
   ctx = context;
   panel = $('inspector');
   on('global-selection', render);
+  on('video-thumb-changed', (p) => { if (state.selection.paths.length === 1 && state.selection.paths[0] === p) render(); });
   on('lib-changed', render);
   on('image-tags-changed', (map) => {
     if (state.selection.paths.some((p) => map && p in map)) render();
@@ -134,6 +136,16 @@ function loadDims(it) {
   if (dimsCache.has(key)) { setText(single.dims, dimsCache.get(key)); return; }
   setText(single.dims, '…');
   const my = ++dimsToken;
+  const done = (v) => {
+    dimsCache.set(key, v);
+    if (dimsCache.size > 500) dimsCache.delete(dimsCache.keys().next().value);
+    if (my === dimsToken) setText(single.dims, v);
+  };
+  if (isVideo(it)) {
+    videoInfo(it).then((m) => done(m.width ? `${m.width} × ${m.height} px・${formatDuration(m.duration)}` : formatDuration(m.duration) || '—'),
+      () => { if (my === dimsToken) setText(single.dims, '—'); });
+    return;
+  }
   const probe = new Image();
   probe.onload = () => {
     const v = probe.naturalWidth ? `${probe.naturalWidth} × ${probe.naturalHeight} px` : '—';

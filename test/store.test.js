@@ -231,3 +231,28 @@ test('image views follow file and folder renames and are pruned', () => {
   s.pruneMissing();
   assert.deepEqual(Object.keys(s.data.views), [s.norm(keep)]);
 });
+
+test('video thumbnail scenes follow renames, are validated and pruned', () => {
+  const s = mk();
+  const a = path.join(dir, 'a.mp4');
+  const b = path.join(dir, 'b.mp4');
+  assert.equal(s.getVideoThumbTime(a), 0);
+  s.setVideoThumbTime(a, 12.34567);
+  assert.equal(s.getVideoThumbTime(a), 12.346);
+  s.renameImageKey(a, b);
+  assert.equal(s.getVideoThumbTime(a), 0);
+  assert.equal(s.getVideoThumbTime(b), 12.346);
+  s.setVideoThumbTime(b, 0); // back to the first frame: entry removed
+  assert.deepEqual(Object.keys(s.data.videoThumbs), []);
+  s.setVideoThumbTime(b, -5);
+  s.setVideoThumbTime(b, 'x');
+  assert.deepEqual(Object.keys(s.data.videoThumbs), []);
+  const inside = path.join(dir, 'Old', 'v.webm');
+  s.setVideoThumbTime(inside, 3);
+  s.renameFolderPrefix(path.join(dir, 'Old'), path.join(dir, 'New'));
+  assert.equal(s.getVideoThumbTime(path.join(dir, 'New', 'v.webm')), 3);
+  const keep = write(path.join(dir, 'keep.mp4'));
+  s.setVideoThumbTime(keep, 1);
+  s.pruneMissing();
+  assert.deepEqual(Object.keys(s.data.videoThumbs), [s.norm(keep)]);
+});

@@ -17,6 +17,8 @@ import { bulkEditorState } from './bulk.js';
 import { addTagsToPaths as addTags } from './tags.js';
 import { dirname } from './ui.js';
 import { fileUrl } from './ui.js';
+import { activePlayer, grabFrame } from './video.js';
+import { maskEnabled } from './mask.js';
 
 const TAB_TYPE = 'application/x-km-tab';
 
@@ -90,8 +92,8 @@ async function phase1({ wb, sidebar, step, report }) {
   step('default layout: gallery | Preview');
 
   const expectDirect = Number(state.info.smokeExpectDirect || 1);
-  await waitFor(() => g.grid.querySelectorAll('.tile').length >= expectDirect, 20000, 'gallery tiles');
-  report.tiles = g.grid.querySelectorAll('.tile').length;
+  await waitFor(() => g.grid.querySelectorAll('.tile:not(.folder)').length >= expectDirect, 20000, 'gallery tiles');
+  report.tiles = g.grid.querySelectorAll('.tile:not(.folder)').length;
   assert(!g.includeSub && g.items.length === expectDirect, `folder shows only its direct images (${g.items.length} vs ${expectDirect})`);
   assert(g.items.every((it) => samePath(dirname(it.path), g.source.path)), 'no subfolder images listed');
   await waitFor(() => {
@@ -174,7 +176,7 @@ async function phase1({ wb, sidebar, step, report }) {
   await addTagsToPaths(paths, [tagId]);
   await waitFor(() => document.querySelectorAll('#inspector .insp-tags .chip').length >= 1, 5000, 'inspector tag chip');
   g.setTagFilter([tagId]);
-  await waitFor(() => g.grid.querySelectorAll('.tile').length === paths.length, 5000, 'tag filter');
+  await waitFor(() => g.grid.querySelectorAll('.tile:not(.folder)').length === paths.length, 5000, 'tag filter');
   g.setTagFilter([]);
   step(`tagged ${paths.length} images, filter ok`);
 
@@ -422,6 +424,7 @@ async function phase1({ wb, sidebar, step, report }) {
 
   // 23. wheel zoom memory, still GIFs, multi-folder gallery, Recycle Bin
   await viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, report });
+  await folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, report });
 
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
@@ -917,4 +920,96 @@ async function viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, rep
   assert(!refused.trashed.length && refused.failed.length === 1, 'root folder refused');
   step('削除: probe file sent to the Recycle Bin, registered root refused');
   report.trash = { trashed: tr.trashed.length };
+}
+
+/** A 1 s WebM recorded from a canvas (no encoder needed in the fixture script). */
+async function recordWebm() {
+  const c = document.createElement('canvas');
+  c.width = 160;
+  c.height = 90;
+  const g2 = c.getContext('2d');
+  let n = 0;
+  const draw = () => { g2.fillStyle = n++ % 2 ? '#c8a45a' : '#1d2b3a'; g2.fillRect(0, 0, 160, 90); };
+  draw();
+  const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' });
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((r) => { rec.onstop = r; });
+  const timer = setInterval(draw, 60);
+  rec.start();
+  await sleep(1000);
+  rec.stop();
+  await stopped;
+  clearInterval(timer);
+  return new Uint8Array(await new Blob(chunks, { type: 'video/webm' }).arrayBuffer());
+}
+
+async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, report }) {
+  wb.activate(galleryTabId);
+  const root = state.roots[0].path;
+  if (!g.source || !samePath(g.source.path, root) || g.source.paths) await g.setSource({ kind: 'folder', path: root });
+  await waitFor(() => g.loaded && g.folderView.length > 0, 5000, 'folder tiles at the root');
+  const sub = g.folderView[0].path;
+  const tileOf = (p) => g.grid.querySelector(`.tile.folder[data-dir="${CSS.escape(p)}"]`);
+  assert(g.backEl.disabled, '戻る disabled at a registered root');
+
+  // folder tile → enter; 戻る → up
+  tileOf(sub).dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  await waitFor(() => samePath(g.source.path, sub) && g.loaded, 5000, 'entered the subfolder');
+  await waitFor(() => !g.backEl.disabled, 2000, '戻る enabled inside');
+  g.backEl.click();
+  await waitFor(() => samePath(g.source.path, root) && tileOf(sub), 5000, 'back at the root');
+  step('gallery: subfolder tile enters the folder, 戻る returns to the parent');
+
+  // mask: Alt+M hides the focused tree folder (tree + folder tile); Ctrl+Alt+M shows; Ctrl+Alt+Shift+M hides
+  await sidebar.expandFolder(root);
+  const row = () => document.querySelector(`.tree-row.folder[data-path="${CSS.escape(sub)}"]`);
+  row().dispatchEvent(new MouseEvent('click', { bubbles: true })); // focuses the row (and opens it)
+  await sleep(200);
+  wb.activate(galleryTabId);
+  await g.setSource({ kind: 'folder', path: root });
+  await waitFor(() => tileOf(sub), 3000, 'root again');
+  key({ key: 'm', code: 'KeyM', altKey: true });
+  await waitFor(() => !row() && !tileOf(sub), 3000, 'masked folder hidden in tree and gallery');
+  key({ key: 'm', code: 'KeyM', altKey: true, ctrlKey: true });
+  await waitFor(() => row() && row().classList.contains('masked') && tileOf(sub), 3000, 'mask off shows it dimmed').catch((e) => {
+    throw new Error(`${e.message} ${JSON.stringify({ row: !!row(), cls: row() && row().className, tile: !!tileOf(sub), enabled: maskEnabled(), list: state.settings.maskedFolders, fv: g.folderView.map((d) => d.name) })}`);
+  });
+  key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
+  await waitFor(() => !row() && !tileOf(sub) && maskEnabled(), 3000, 'mask on hides it again');
+  // clean up: show all, unmark, mask on
+  key({ key: 'm', code: 'KeyM', altKey: true, ctrlKey: true });
+  await waitFor(() => row(), 3000, 'shown for unmarking');
+  row().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await sleep(200);
+  wb.activate(galleryTabId);
+  key({ key: 'm', code: 'KeyM', altKey: true });
+  key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
+  await waitFor(() => row() && !row().classList.contains('masked') && (state.settings.maskedFolders || []).length === 0, 3000, 'unmarked');
+  await g.setSource({ kind: 'folder', path: root });
+  step('mask: Alt+M hides tree row + folder tile, Ctrl+Alt+M shows (dimmed), Ctrl+Alt+Shift+M hides');
+
+  // video: listed with a still thumbnail; range requests; opening plays it in the overlay
+  const bytes = await recordWebm();
+  const vpath = await api.smokeWriteFixture(root, 'km-smoke-added-clip.webm', bytes);
+  await waitFor(() => g.itemsByPath.has(vpath), 8000, 'video listed');
+  const vtile = g.tileByPath.get(vpath);
+  assert(vtile.classList.contains('video'), 'video tile marked');
+  const vimg = vtile.querySelector('img');
+  vtile.scrollIntoView();
+  if (!vimg.getAttribute('src')) vimg.src = vimg.dataset.src;
+  await waitFor(() => vimg.complete && vimg.naturalWidth > 0, 25000, 'video thumbnail decoded');
+  const frame = new Uint8Array(await grabFrame(vpath, 0)); // the renderer decodes the frame itself
+  assert(frame.length > 100 && frame[0] === 0xff && frame[1] === 0xd8, 'frame grabbed as JPEG');
+  const res = await fetch(fileUrl({ path: vpath }), { headers: { Range: 'bytes=0-9' } });
+  assert(res.status === 206 && (await res.arrayBuffer()).byteLength === 10, `range request served (${res.status})`);
+  wb.openImage(vpath, { fromPane: g });
+  await waitFor(() => activePlayer() && activePlayer().video.readyState >= 1, 8000, 'player opened');
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await waitFor(() => !activePlayer(), 3000, 'player closed with Esc');
+  const tr = await api.trash([vpath]);
+  assert(tr.trashed.length === 1, 'video fixture removed');
+  await waitFor(() => !g.itemsByPath.has(vpath), 8000, 'video gone from the gallery');
+  report.video = { thumbWidth: vimg.naturalWidth };
+  step(`video: tile with a ${vimg.naturalWidth}px frame thumbnail, Range 206, player opens and Esc closes`);
 }
