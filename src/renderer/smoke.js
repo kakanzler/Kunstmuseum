@@ -1,7 +1,7 @@
 // Smoke test sequence (KM_SMOKE=1). Phase 1 runs against a fresh userData;
 // phase 2 is a second launch against the same userData and verifies that the
 // persisted layout was restored. Operates only on the smoke fixtures.
-import { api, state, setLib, samePath, on, pathUnder, setGlobalSelection } from './state.js';
+import { api, state, setLib, samePath, on, pathUnder, setGlobalSelection, galleries } from './state.js';
 import { LayoutModel } from './layout-model.js';
 import { addTagsToPaths, openTagManager } from './tags.js';
 import { renameFolderTo } from './ops.js';
@@ -18,7 +18,7 @@ import { addTagsToPaths as addTags } from './tags.js';
 import { dirname } from './ui.js';
 import { fileUrl } from './ui.js';
 import { activePlayer, grabFrame } from './video.js';
-import { maskEnabled } from './mask.js';
+import { maskEnabled, isHiddenPath } from './mask.js';
 
 const TAB_TYPE = 'application/x-km-tab';
 
@@ -425,6 +425,9 @@ async function phase1({ wb, sidebar, step, report }) {
   // 23. wheel zoom memory, still GIFs, multi-folder gallery, Recycle Bin
   await viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, report });
   await folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, report });
+  // a second gallery tab on the masked folder (mask is off now): the masked relaunch must not show it
+  await wb.openFolder(report.maskedFolder, { newTab: true });
+  wb.activate(galleryTabId);
 
   // 15. layout serialize/restore roundtrip, then persist for phase 2
   const ser = JSON.parse(JSON.stringify(wb.serialize()));
@@ -446,8 +449,23 @@ async function phase2({ wb, sidebar, savedLayout, step, report }) {
   await Promise.all([...wb.panes.values()].map((p) => p.loadPromise || p.loading));
   const now = wb.serialize();
   report.restored = kinds(wb);
-  assert(sameJson(comparable(now), comparable(savedLayout)), `restored layout differs:\n${JSON.stringify(comparable(now))}\n${JSON.stringify(comparable(savedLayout))}`);
-  assert(wb.model.allTabs().some((t) => t.kind === 'image'), 'image tab restored');
+  // phase 1 quit with a folder masked: the app starts masked, so image tabs inside it are
+  // closed at launch; everything else must come back exactly as saved
+  const hiddenTabs = savedLayout.groups.flatMap((g) => g.tabs).filter((t) => t.kind === 'image' && isHiddenPath(t.path));
+  assert(hiddenTabs.length > 0, 'phase 1 left image tabs inside the masked folder');
+  const tabsOf = (l, skip) => l.groups.map((g) => g.tabs.filter((t) => !skip(t)).map((t) => ({ kind: t.kind, path: t.path || null, state: t.state || null })))
+    .filter((ts) => ts.length);
+  const hiddenGallery = (t) => t.kind === 'gallery' && t.state && t.state.source && t.state.source.kind === 'folder' && isHiddenPath(t.state.source.path);
+  const saved = comparable(savedLayout);
+  const hiddenGalleries = saved.groups.flatMap((g) => g.tabs).filter(hiddenGallery);
+  assert(hiddenGalleries.length === 1, 'phase 1 left a gallery tab on the masked folder');
+  for (const t of hiddenGalleries) Object.assign(t.state, { source: null, selection: [], focus: null });
+  const want = tabsOf(saved, (t) => t.kind === 'image' && isHiddenPath(t.path));
+  const got = tabsOf(comparable(now), () => false);
+  assert(sameJson(got, want), `restored layout differs:\n${JSON.stringify(got)}\n${JSON.stringify(want)}`);
+  assert(!wb.model.allTabs().some((t) => t.kind === 'image' && isHiddenPath(t.path)), 'image tabs inside the masked folder closed');
+  report.maskedTabsClosed = hiddenTabs.length;
+  assert(![...galleries.values()].some((p) => p.source && p.source.kind === 'folder' && isHiddenPath(p.source.path)), 'no gallery shows the masked folder');
 
   // category hierarchy from phase 1 survived the relaunch
   const shiba = state.lib.tags.find((t) => t.name === '柴犬');
@@ -493,7 +511,7 @@ async function phase2({ wb, sidebar, savedLayout, step, report }) {
   await waitFor(() => !document.querySelector('.modal .settings-dialog'), 3000, '設定 closed');
   await flushSettings();
   step('keymap override survived the relaunch; すべて既定に戻す ok');
-  step(`second launch restored the layout ${JSON.stringify(report.restored)}`);
+  step(`second launch restored the layout ${JSON.stringify(report.restored)} (${report.maskedTabsClosed} image tab(s) in the masked folder closed, its gallery tab emptied)`);
 }
 
 
@@ -984,8 +1002,12 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   await waitFor(() => row() && row().classList.contains('masked') && tileOf(sub), 3000, 'mask off shows it dimmed').catch((e) => {
     throw new Error(`${e.message} ${JSON.stringify({ row: !!row(), cls: row() && row().className, tile: !!tileOf(sub), enabled: maskEnabled(), list: state.settings.maskedFolders, fv: g.folderView.map((d) => d.name) })}`);
   });
+  // while shown, open the marked folder; turning the mask on must take it off screen
+  await g.setSource({ kind: 'folder', path: sub });
   key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
-  await waitFor(() => !row() && !tileOf(sub) && maskEnabled(), 3000, 'mask on hides it again');
+  await waitFor(() => !row() && maskEnabled() && !g.source, 3000, 'mask on hides it again and clears the gallery showing it');
+  await g.setSource({ kind: 'folder', path: root });
+  await waitFor(() => g.loaded && !tileOf(sub), 3000, 'root without the masked tile');
   // clean up: show all, unmark, mask on
   key({ key: 'M', code: 'KeyM', shiftKey: true, ctrlKey: true });
   await waitFor(() => row(), 3000, 'shown for unmarking');
@@ -1002,10 +1024,16 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   key({ key: 'm', code: 'KeyM', altKey: true });
   key({ key: 'M', code: 'KeyM', shiftKey: true, ctrlKey: true });
   await waitFor(() => row() && row().classList.contains('masked') && !maskEnabled(), 3000, 'marked, mask off');
+  // an image tab inside it (allowed while shown): the masked relaunch must close it
+  const inSub = (await api.scan(sub, false))[0];
+  assert(inSub, 'an image inside the masked folder');
+  wb.openImage(inSub.path, {});
+  await waitFor(() => wb.model.allTabs().some((t) => t.kind === 'image' && samePath(t.path, inSub.path)), 3000, 'image tab in the masked folder');
+  wb.activate(galleryTabId);
   flushSettings();
   report.maskedFolder = sub;
   await g.setSource({ kind: 'folder', path: root });
-  step('mask: Alt+M hides tree row + folder tile, Ctrl+Shift+M shows (dimmed), Ctrl+Alt+Shift+M hides');
+  step('mask: Alt+M hides tree row + folder tile, Ctrl+Shift+M shows (dimmed), Ctrl+Alt+Shift+M hides it and clears the gallery showing it');
 
   // video: listed with a still thumbnail; range requests; opening plays it in the overlay
   const bytes = await recordWebm();

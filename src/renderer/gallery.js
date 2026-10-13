@@ -7,7 +7,7 @@ import {
 } from './state.js';
 import { el, toast, toastError, showContextMenu, collator, thumbUrl, basename, dirname, debounce, isVideo } from './ui.js';
 import { openVideoPlayer, openThumbSceneDialog } from './video.js';
-import { isMasked } from './mask.js';
+import { isMasked, isHiddenPath } from './mask.js';
 import { tagChip, fillTagSelect } from './tags.js';
 import { filterMatcher } from './tag-tree.js';
 import { openScreenDialog } from './screen.js';
@@ -28,6 +28,14 @@ const MAX_SAVED_SELECTION = 2000;
 export function sourceDirs(src) {
   if (!src || src.kind !== 'folder') return [];
   return Array.isArray(src.paths) && src.paths.length ? src.paths : [src.path];
+}
+
+/** `src` without folders hidden by the mask (null when nothing is left). */
+export function unmaskedSource(src) {
+  if (!src || src.kind !== 'folder') return src;
+  const dirs = sourceDirs(src);
+  const keep = dirs.filter((d) => !isHiddenPath(d));
+  return keep.length === dirs.length ? src : folderSource(keep);
 }
 
 /** Normalised folder source for a list of folders (null when empty). */
@@ -71,7 +79,7 @@ export class GalleryPane {
     this.id = tab.id;
     const st = { ...defaultGalleryState(), ...(tab.state || {}) };
     this.source = st.source && st.source.kind === 'tagged' ? st.source
-      : st.source && st.source.kind === 'folder' && st.source.path ? folderSource(sourceDirs(st.source)) : null;
+      : st.source && st.source.kind === 'folder' && st.source.path ? unmaskedSource(folderSource(sourceDirs(st.source))) : null;
     this.includeSub = false; // always starts at direct images only (not restored)
     this.search = st.search || '';
     this.sortKey = ['name', 'mtime', 'size'].includes(st.sortKey) ? st.sortKey : 'name';
@@ -108,7 +116,7 @@ export class GalleryPane {
       on('folder-renamed', ({ from, to }) => this.onFolderRenamed(from, to)),
       on('roots-changed', () => this.onRootsChanged()),
       on('paths-trashed', (trashed) => this.onTrashed(trashed)),
-      on('mask-changed', () => this.applyView({ keepScroll: true })),
+      on('mask-changed', () => this.onMaskChanged()),
       on('video-thumb-changed', (p) => this.onVideoThumbChanged(p)),
     ];
     this.setThumbSize(this.thumbSize, false);
@@ -453,6 +461,13 @@ export class GalleryPane {
   goUp() {
     const up = this.parentDir();
     if (up) this.navigateTo(up);
+  }
+
+  /** Mask on: a folder inside a masked one is no longer shown here. */
+  onMaskChanged() {
+    const src = unmaskedSource(this.source);
+    if (src !== this.source) this.setSource(src);
+    else this.applyView({ keepScroll: true });
   }
 
   onVideoThumbChanged(p) {

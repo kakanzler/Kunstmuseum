@@ -4,7 +4,7 @@
 // nothing on disk changes. The marked folders are kept in settings
 // (maskedFolders → library.json, untouched by reinstalls); on/off is per run
 // and every launch starts masked.
-import { state, saveSettings, emit, on, normKey, samePath, remapUnder } from './state.js';
+import { state, saveSettings, emit, on, normKey, samePath, remapUnder, pathUnder } from './state.js';
 import { isTrashed } from './ops.js';
 
 function list() {
@@ -26,6 +26,11 @@ export function isMarked(p) {
 /** The folder is hidden right now. */
 export function isMasked(p) {
   return maskEnabled() && isMarked(p);
+}
+
+/** A file or folder inside (or equal to) a masked folder, while the mask is on. */
+export function isHiddenPath(p) {
+  return maskEnabled() && list().some((x) => pathUnder(p, x));
 }
 
 function store(next) {

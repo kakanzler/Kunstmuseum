@@ -4,6 +4,7 @@ import { LayoutModel } from './layout-model.js';
 import { api, state, emit, on, saveSettings, isWin, samePath, remapUnder, pathUnder, lookupItem } from './state.js';
 import { el, showContextMenu, dirname, basename, isVideo } from './ui.js';
 import { openVideoPlayer } from './video.js';
+import { isHiddenPath } from './mask.js';
 import { keyLabel } from './commands.js';
 import { GalleryPane, defaultGalleryState } from './gallery.js';
 import { GraphPane } from './graph.js';
@@ -66,7 +67,7 @@ class Workbench {
 
   lastFolderSource() {
     const p = state.settings.lastFolder;
-    if (p && state.roots.some((r) => r.exists && pathUnder(p, r.path))) return { kind: 'folder', path: p };
+    if (p && !isHiddenPath(p) && state.roots.some((r) => r.exists && pathUnder(p, r.path))) return { kind: 'folder', path: p };
     return null;
   }
 

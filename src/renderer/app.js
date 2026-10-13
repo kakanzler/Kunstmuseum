@@ -1,6 +1,6 @@
 // Renderer entry point: bootstrap, global keyboard routing, panel resizers,
 // smoke test.
-import { api, state, setLib, saveSettings, emit, on, flushSettings, galleries } from './state.js';
+import { api, state, setLib, saveSettings, emit, on, flushSettings, galleries, setGlobalSelection } from './state.js';
 import { toast, toastError, isModalOpen, isEditable } from './ui.js';
 import * as sidebar from './sidebar.js';
 import { initInspector } from './inspector.js';
@@ -13,7 +13,7 @@ import { openQuickOpen, isQuickOpenOpen } from './quickopen.js';
 import { openBulkEditor } from './bulk.js';
 import { initFetchPanel, toggleFetchPanel } from './fetcher.js';
 import { initVideoFrames, isPlayerOpen } from './video.js';
-import { initMask, setMaskEnabled } from './mask.js';
+import { initMask, setMaskEnabled, maskEnabled, isHiddenPath } from './mask.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -158,6 +158,17 @@ function openBulkForCurrentFolder() {
   openBulkEditor({ folder: g.source.path, includeSub: g.includeSub });
 }
 
+/**
+ * Mask on (every launch, Ctrl+Alt+Shift+M, Alt+M): nothing inside a masked
+ * folder stays on screen. Galleries drop such folders themselves; image tabs
+ * close and the selection (Preview / inspector) is cleared.
+ */
+function enforceMask() {
+  if (!maskEnabled()) return;
+  wb.closeImageTabs((p) => isHiddenPath(p));
+  if (state.selection.paths.some((p) => isHiddenPath(p))) setGlobalSelection({ paths: [], primary: null, origin: null });
+}
+
 /** Top-bar hint, rendered from the current bindings. */
 function renderHint() {
   $('topbar-hint').textContent = `${keyLabel('tab.splitRight')} 分割・${keyLabel('tab.close')} 閉じる・${keyLabel('preview.showRight')} Preview・${keyLabel('graph.showRight')} グラフ・${keyLabel('fetch.toggle')} 画像取得・${keyLabel('settings.open')} 設定`;
@@ -191,6 +202,8 @@ async function boot() {
 
   await sidebar.loadRoots();
   await wb.init($('workbench'));
+  enforceMask();
+  on('mask-changed', enforceMask);
   const g = wb.mruGalleryPane();
   if (g && g.source && g.source.kind === 'folder') sidebar.revealPath(g.source.path);
 
