@@ -12,7 +12,7 @@ export const COMMANDS = [
   { id: 'screen.open', label: 'スクリーン表示', category: '表示', default: 'Ctrl+Alt+Shift+O' },
   { id: 'fetch.toggle', label: '画像取得サイドバー（fotoget）', category: '表示', default: 'Ctrl+]' },
   { id: 'tree.mask', label: 'フォルダをマスク／マスクを外す（ツリーで選択中のフォルダ）', category: '表示', default: 'Alt+M' },
-  { id: 'tree.unmaskAll', label: 'マスクを解除（すべて表示）', category: '表示', default: 'Ctrl+Alt+M' },
+  { id: 'tree.unmaskAll', label: 'マスクを解除（すべて表示）', category: '表示', default: 'Ctrl+Shift+M' },
   { id: 'tree.maskOn', label: 'マスク状態にする（マスクしたフォルダを隠す）', category: '表示', default: 'Ctrl+Alt+Shift+M' },
   { id: 'settings.open', label: '設定を開く', category: '全般', default: 'Ctrl+,' },
   { id: 'search.quickOpen', label: 'ファイル名で検索（全フォルダ）', category: '全般', default: 'Ctrl+F' },

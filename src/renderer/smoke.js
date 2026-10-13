@@ -961,7 +961,7 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   await waitFor(() => samePath(g.source.path, root) && tileOf(sub), 5000, 'back at the root');
   step('gallery: subfolder tile enters the folder, 戻る returns to the parent');
 
-  // mask: Alt+M hides the focused tree folder (tree + folder tile); Ctrl+Alt+M shows; Ctrl+Alt+Shift+M hides
+  // mask: Alt+M hides the focused tree folder (tree + folder tile); Ctrl+Shift+M shows; Ctrl+Alt+Shift+M hides
   await sidebar.expandFolder(root);
   const row = () => document.querySelector(`.tree-row.folder[data-path="${CSS.escape(sub)}"]`);
   row().dispatchEvent(new MouseEvent('click', { bubbles: true })); // focuses the row (and opens it)
@@ -971,14 +971,14 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   await waitFor(() => tileOf(sub), 3000, 'root again');
   key({ key: 'm', code: 'KeyM', altKey: true });
   await waitFor(() => !row() && !tileOf(sub), 3000, 'masked folder hidden in tree and gallery');
-  key({ key: 'm', code: 'KeyM', altKey: true, ctrlKey: true });
+  key({ key: 'M', code: 'KeyM', shiftKey: true, ctrlKey: true });
   await waitFor(() => row() && row().classList.contains('masked') && tileOf(sub), 3000, 'mask off shows it dimmed').catch((e) => {
     throw new Error(`${e.message} ${JSON.stringify({ row: !!row(), cls: row() && row().className, tile: !!tileOf(sub), enabled: maskEnabled(), list: state.settings.maskedFolders, fv: g.folderView.map((d) => d.name) })}`);
   });
   key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
   await waitFor(() => !row() && !tileOf(sub) && maskEnabled(), 3000, 'mask on hides it again');
   // clean up: show all, unmark, mask on
-  key({ key: 'm', code: 'KeyM', altKey: true, ctrlKey: true });
+  key({ key: 'M', code: 'KeyM', shiftKey: true, ctrlKey: true });
   await waitFor(() => row(), 3000, 'shown for unmarking');
   row().dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await sleep(200);
@@ -987,7 +987,7 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   key({ key: 'M', code: 'KeyM', altKey: true, ctrlKey: true, shiftKey: true });
   await waitFor(() => row() && !row().classList.contains('masked') && (state.settings.maskedFolders || []).length === 0, 3000, 'unmarked');
   await g.setSource({ kind: 'folder', path: root });
-  step('mask: Alt+M hides tree row + folder tile, Ctrl+Alt+M shows (dimmed), Ctrl+Alt+Shift+M hides');
+  step('mask: Alt+M hides tree row + folder tile, Ctrl+Shift+M shows (dimmed), Ctrl+Alt+Shift+M hides');
 
   // video: listed with a still thumbnail; range requests; opening plays it in the overlay
   const bytes = await recordWebm();

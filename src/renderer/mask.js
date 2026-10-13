@@ -1,6 +1,6 @@
 // Folder mask: folders marked with Alt+M disappear from the sidebar tree and
 // from the gallery's folder tiles while the mask is on (Ctrl+Alt+Shift+M);
-// Ctrl+Alt+M shows everything again (marked folders are dimmed). Display only:
+// Ctrl+Shift+M shows everything again (marked folders are dimmed). Display only:
 // nothing on disk changes. Stored in settings (maskedFolders, maskEnabled).
 import { state, saveSettings, emit, on, normKey, samePath, remapUnder } from './state.js';
 import { isTrashed } from './ops.js';
