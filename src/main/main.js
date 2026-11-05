@@ -11,7 +11,7 @@ const {
 const fsops = require('./fsops');
 const { Store } = require('./store');
 const { FileIndex } = require('./file-index');
-const { FetchRunner, FETCH_DEFAULTS } = require('./fetcher');
+const { FetchRunner, FETCH_DEFAULTS, genreOptions, listGenreDirs } = require('./fetcher');
 
 // Quick Open (Ctrl+F) index of all images below the registered roots
 const fileIndex = new FileIndex();
@@ -456,7 +456,10 @@ function registerIpc() {
   handle('fs:scan', async (dir, recursive) => {
     const d = assertInRoots(dir, 'フォルダ');
     const items = await fsops.scanFolder(d, { recursive: !!recursive });
-    for (const it of items) it.tags = store.getImageTags(it.path);
+    for (const it of items) {
+      it.tags = store.getImageTags(it.path);
+      it.fav = store.isFavorite(it.path);
+    }
     return items;
   });
   handle('fs:listTagged', async () => {
@@ -466,7 +469,19 @@ function registerIpc() {
       try {
         const st = await fsp.stat(e.path);
         if (!st.isFile()) return;
-        out.push({ path: e.path, name: path.basename(e.path), size: st.size, mtime: st.mtimeMs, ext: fsops.extOf(e.path), tags: e.tags });
+        out.push({ path: e.path, name: path.basename(e.path), size: st.size, mtime: st.mtimeMs, ext: fsops.extOf(e.path), tags: e.tags, fav: store.isFavorite(e.path) });
+      } catch { /* missing: ignored */ }
+    }));
+    return out;
+  });
+  handle('fs:listFavorites', async () => {
+    const out = [];
+    const list = store.listFavorites().filter((p) => store.isInRoots(p) && fsops.isSupported(p));
+    await Promise.all(list.map(async (p) => {
+      try {
+        const st = await fsp.stat(p);
+        if (!st.isFile()) return;
+        out.push({ path: p, name: path.basename(p), size: st.size, mtime: st.mtimeMs, ext: fsops.extOf(p), tags: store.getImageTags(p), fav: true });
       } catch { /* missing: ignored */ }
     }));
     return out;
@@ -474,7 +489,7 @@ function registerIpc() {
   handle('fs:stat', async (p) => {
     const f = assertInRoots(p, 'ファイル');
     const st = await fsp.stat(f);
-    return { path: f, name: path.basename(f), size: st.size, mtime: st.mtimeMs, ext: fsops.extOf(f), tags: store.getImageTags(f) };
+    return { path: f, name: path.basename(f), size: st.size, mtime: st.mtimeMs, ext: fsops.extOf(f), tags: store.getImageTags(f), fav: store.isFavorite(f) };
   });
 
   handle('fs:renameFile', async (p, newName) => {
@@ -557,6 +572,18 @@ function registerIpc() {
   handle('lib:get', () => libSnapshot());
   handle('images:getView', (p) => store.getImageView(assertInRoots(p, 'ファイル')));
   handle('images:setView', (p, v) => { store.setImageView(assertInRoots(p, 'ファイル'), v); return true; });
+  handle('images:getFavorites', (paths) => {
+    const out = {};
+    for (const p of Array.isArray(paths) ? paths : []) if (typeof p === 'string') out[p] = store.isFavorite(p);
+    return out;
+  });
+  // ★ toggle for a set: stars all unless every one is already starred, then unstars all
+  handle('images:toggleFavorite', (paths) => {
+    const ps = (Array.isArray(paths) ? paths : []).map((p) => assertInRoots(p, 'ファイル'));
+    const on = !ps.every((p) => store.isFavorite(p));
+    store.setFavorites(ps, on);
+    return { on, paths: ps };
+  });
   handle('videos:getThumbTime', (p) => store.getVideoThumbTime(assertInRoots(p, 'ファイル')));
   handle('videos:setThumbTime', (p, t) => { store.setVideoThumbTime(assertInRoots(p, 'ファイル'), t); return true; });
   ipcMain.on('vthumb:reply', onVideoFrameReply);
@@ -614,6 +641,7 @@ function registerIpc() {
   });
   handle('fetch:defaults', () => ({ ...FETCH_DEFAULTS }));
   handle('fetch:run', (opts) => fetchRunner.run(opts));
+  handle('fetch:genres', async (out, history, authors) => genreOptions(await listGenreDirs(out), history, authors));
   handle('fetch:cancel', () => fetchRunner.cancel());
   handle('fetch:openOut', async (dir) => {
     const d = path.resolve(String(dir || FETCH_DEFAULTS.out));

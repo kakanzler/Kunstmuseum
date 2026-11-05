@@ -257,3 +257,37 @@ test('video thumbnail scenes follow renames, are validated and pruned', () => {
   s.pruneMissing();
   assert.deepEqual(Object.keys(s.data.videoThumbs), [s.norm(keep)]);
 });
+
+test('favorites keep the original case, follow renames, survive reload and are pruned', () => {
+  const s = mk();
+  const a = path.join(dir, 'Pic A.png');
+  const g = path.join(dir, 'anim.GIF');
+  assert.equal(s.isFavorite(a), false);
+  assert.equal(s.setFavorites([a, g], true), 2);
+  assert.equal(s.setFavorites([a], true), 0); // already starred
+  assert.equal(s.isFavorite(a.toUpperCase()), process.platform === 'win32');
+  assert.deepEqual(s.listFavorites().sort(), [g, a].sort());
+  const b = path.join(dir, 'Pic B.png');
+  s.renameImageKey(a, b);
+  assert.equal(s.isFavorite(a), false);
+  assert.equal(s.isFavorite(b), true);
+  assert.ok(s.listFavorites().includes(b));
+  const inside = path.join(dir, 'Old', 'Sub', 'v.mp4');
+  s.setFavorites([inside], true);
+  s.renameFolderPrefix(path.join(dir, 'Old'), path.join(dir, 'New'));
+  const moved = path.join(dir, 'New', 'Sub', 'v.mp4');
+  assert.equal(s.isFavorite(moved), true);
+  assert.ok(s.listFavorites().includes(moved));
+  assert.equal(s.setFavorites([g], false), 1);
+  assert.equal(s.isFavorite(g), false);
+  s.flush();
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.favorites.junk = 42; // invalid entries are dropped on load
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const r = mk();
+  assert.deepEqual(r.listFavorites().sort(), [b, moved].sort());
+  const keep = write(path.join(dir, 'keep.png'));
+  r.setFavorites([keep], true);
+  r.pruneMissing();
+  assert.deepEqual(r.listFavorites(), [keep]);
+});

@@ -11,6 +11,8 @@ import { isMasked, isHiddenPath } from './mask.js';
 import { tagChip, fillTagSelect } from './tags.js';
 import { filterMatcher } from './tag-tree.js';
 import { openScreenDialog } from './screen.js';
+import { toggleFavorites } from './favorites.js';
+import { keyLabel } from './commands.js';
 import {
   checkFileName, renameFileTo, splitName, moveInto, draggedPaths, dragSource, startPathsDrag, DRAG_TYPE,
   trashPaths, isTrashed,
@@ -48,7 +50,7 @@ export function folderSource(dirs) {
 
 function sameSource(a, b) {
   if (!a || !b || a.kind !== b.kind) return false;
-  if (a.kind === 'tagged') return true;
+  if (a.kind === 'tagged' || a.kind === 'favorites') return true;
   const x = sourceDirs(a);
   const y = sourceDirs(b);
   return x.length === y.length && x.every((d) => y.some((e) => samePath(d, e)));
@@ -78,7 +80,7 @@ export class GalleryPane {
     this.tabId = tab.id;
     this.id = tab.id;
     const st = { ...defaultGalleryState(), ...(tab.state || {}) };
-    this.source = st.source && st.source.kind === 'tagged' ? st.source
+    this.source = st.source && (st.source.kind === 'tagged' || st.source.kind === 'favorites') ? st.source
       : st.source && st.source.kind === 'folder' && st.source.path ? unmaskedSource(folderSource(sourceDirs(st.source))) : null;
     this.includeSub = false; // always starts at direct images only (not restored)
     this.search = st.search || '';
@@ -118,6 +120,7 @@ export class GalleryPane {
       on('paths-trashed', (trashed) => this.onTrashed(trashed)),
       on('mask-changed', () => this.onMaskChanged()),
       on('video-thumb-changed', (p) => this.onVideoThumbChanged(p)),
+      on('favorites-changed', (res) => this.onFavoritesChanged(res)),
     ];
     this.setThumbSize(this.thumbSize, false);
     this.renderTagFilter();
@@ -294,6 +297,7 @@ export class GalleryPane {
   title() {
     if (!this.source) return 'ギャラリー';
     if (this.source.kind === 'tagged') return '全フォルダ（タグ付き画像）';
+    if (this.source.kind === 'favorites') return '★ お気に入り';
     const dirs = sourceDirs(this.source);
     const name = (d) => basename(d) || d;
     if (dirs.length === 1) return name(dirs[0]);
@@ -399,7 +403,8 @@ export class GalleryPane {
             seen.add(k);
             return true;
           });
-        } else items = await api.listTagged();
+        } else if (this.source.kind === 'favorites') items = await api.listFavorites();
+        else items = await api.listTagged();
       } catch (e) {
         if (token !== this.loadToken) return;
         if (!quiet) toastError(e, 'フォルダを読み込めませんでした。');
@@ -470,6 +475,15 @@ export class GalleryPane {
     else this.applyView({ keepScroll: true });
   }
 
+  /** ★ toggled somewhere: repaint badges; the favorites view re-reads its list. */
+  onFavoritesChanged({ on: starred, paths }) {
+    if (this.source && this.source.kind === 'favorites') { this.reload(); return; }
+    for (const p of paths) {
+      const tile = this.tileByPath.get(p);
+      if (tile) tile.classList.toggle('fav', !!starred);
+    }
+  }
+
   onVideoThumbChanged(p) {
     const tile = this.tileByPath.get(p);
     const it = this.itemsByPath.get(p);
@@ -482,7 +496,7 @@ export class GalleryPane {
 
   onFsChanged(dirs) {
     if (!this.source) return;
-    const hit = this.source.kind === 'tagged' || dirs.some((d) => this.isShowingDir(d));
+    const hit = this.source.kind === 'tagged' || this.source.kind === 'favorites' || dirs.some((d) => this.isShowingDir(d));
     if (!hit) return;
     if (this.renaming) this.pendingRefresh = true;
     else this.reload();
@@ -511,7 +525,7 @@ export class GalleryPane {
 
   onMoved(moved, dest) {
     if (!this.source) return;
-    const affects = this.source.kind === 'tagged'
+    const affects = this.source.kind === 'tagged' || this.source.kind === 'favorites'
       || moved.some((m) => this.itemsByPath.has(m.from))
       || this.isShowingDir(dest);
     if (!affects) return;
@@ -535,7 +549,7 @@ export class GalleryPane {
       }
       if (this.includeSub && dirs.some((d) => pathUnder(from, d))) { this.reload(); return; }
     }
-    if (this.source.kind === 'tagged') this.reload();
+    if (this.source.kind === 'tagged' || this.source.kind === 'favorites') this.reload();
   }
 
   onRootsChanged() {
@@ -610,7 +624,9 @@ export class GalleryPane {
     const q = this.search.trim().toLowerCase();
     // AND over filter tags; a parent tag also matches images tagged with its descendants
     const matches = filterMatcher(state.lib.tags, this.tagFilter);
+    const favSrc = this.source && this.source.kind === 'favorites';
     const view = this.items.filter((it) => {
+      if (favSrc && isHiddenPath(it.path)) return false; // nothing from a masked folder
       if (q && !it.name.toLowerCase().includes(q)) return false;
       return matches(it.tags);
     });
@@ -670,6 +686,7 @@ export class GalleryPane {
     cap.title = it.name;
     const tile = document.createElement('div');
     tile.className = gif ? 'tile gif' : video ? 'tile video' : 'tile';
+    if (it.fav) tile.classList.add('fav');
     tile.draggable = true;
     tile.append(thumb, cap);
     tile._key = `${it.path}|${it.mtime}|${it.name}`;
@@ -718,7 +735,9 @@ export class GalleryPane {
     this._paintSelection();
     if (!this.source) this._setEmpty('サイドバーでフォルダを選択してください。\nフォルダは「フォルダを追加」またはエクスプローラーからのドロップで登録できます。');
     else if (this.folderView.length) this._setEmpty('');
-    else if (!this.items.length) this._setEmpty(this.source.kind === 'tagged' ? 'タグ付けされた画像がありません。' : 'このフォルダには対応する画像がありません。');
+    else if (!this.items.length) this._setEmpty(this.source.kind === 'tagged' ? 'タグ付けされた画像がありません。'
+      : this.source.kind === 'favorites' ? `お気に入りがありません。画像を選んで ${keyLabel('fav.toggle')} で追加できます。`
+        : 'このフォルダには対応する画像がありません。');
     else if (!this.view.length) this._setEmpty('条件に一致する画像がありません。');
     else this._setEmpty('');
   }
@@ -856,6 +875,10 @@ export class GalleryPane {
       video ? { label: '再生', action: () => openVideoPlayer(it) }
         : { label: '開く', action: () => this.ctx.openImage(it.path, { fromPane: this }) },
       video && !multi && { label: 'サムネイルのシーンを指定…', action: () => openThumbSceneDialog(it) },
+      {
+        label: paths.every((p) => this.itemsByPath.get(p) && this.itemsByPath.get(p).fav) ? '★ お気に入りから外す' : '★ お気に入りに追加',
+        action: () => toggleFavorites(paths),
+      },
       { label: '名前の変更', disabled: multi, action: () => this.startRename(it) },
       { label: multi ? `削除（ごみ箱へ・${paths.length}件）` : '削除（ごみ箱へ）', action: () => trashPaths(paths) },
       { separator: true },

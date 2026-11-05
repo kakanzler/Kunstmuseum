@@ -7,6 +7,7 @@ import { keyLabel } from './commands.js';
 
 const MAX_LOG_LINES = 600;
 const MAX_HISTORY = 30;
+const NEW_GENRE = '__new_genre__'; // pulldown entry that reveals the text field
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
 let panel = null;
@@ -55,6 +56,49 @@ function remember(list, value) {
 
 function fillDatalist(dl, values) {
   dl.replaceChildren(...(values || []).map((v) => el('option', { value: v })));
+}
+
+// ---------- ジャンル pulldown ----------
+let genreNames = [];
+let genreToken = 0;
+
+/** Re-read the choices (save folder's subfolders + history) and re-fill the pulldown. */
+async function refreshGenres() {
+  const my = ++genreToken;
+  const s = saved();
+  let names = s.genres || [];
+  try { names = await api.fetchGenres(f.out.value.trim(), s.genres || [], s.authors || []); } catch { /* history only */ }
+  if (my !== genreToken) return;
+  genreNames = names;
+  const opt = (value, label) => el('option', { value }, label);
+  f.genreSelect.replaceChildren(
+    opt('', names.length ? '（ジャンルを選択）' : '（保存先にフォルダがありません）'),
+    ...names.map((n) => opt(n, n)),
+    opt(NEW_GENRE, '＋ 新しいジャンルを入力…'),
+  );
+  syncGenreSelect();
+}
+
+/** Pulldown shows the current genre; an unlisted genre is edited in the text field. */
+function syncGenreSelect() {
+  const v = f.genre.value.trim();
+  const listed = !v || genreNames.includes(v);
+  f.genreSelect.value = listed ? v : NEW_GENRE;
+  f.genreRow.hidden = listed;
+}
+
+function onGenrePicked() {
+  const v = f.genreSelect.value;
+  if (v === NEW_GENRE) {
+    f.genre.value = '';
+    f.genreRow.hidden = false;
+    f.genre.focus();
+  } else {
+    f.genre.value = v;
+    f.genreRow.hidden = true;
+  }
+  previewCommand();
+  persist();
 }
 
 // ---------- log ----------
@@ -131,6 +175,7 @@ async function run() {
   persist({ genres: remember(s.genres, v.genre), authors: remember(s.authors, v.author) });
   fillDatalist(f.genreList, saved().genres);
   fillDatalist(f.authorList, saved().authors);
+  refreshGenres();
 }
 
 function onDone(m) {
@@ -155,6 +200,7 @@ function onDone(m) {
     f.url.value = '';
     f.title.value = '';
     previewCommand();
+    refreshGenres(); // a new genre folder may have been created
     if (isFetchOpen()) f.url.focus();
   }
 }
@@ -170,7 +216,8 @@ function build() {
   f = {
     url: input('fetch-url', { placeholder: 'https://…', type: 'url' }),
     title: input('fetch-title', { placeholder: '保存フォルダ名' }),
-    genre: input('fetch-genre', { list: 'fetch-genres', placeholder: 'ジャンル（フォルダ名）' }),
+    genre: input('fetch-genre', { list: 'fetch-genres', placeholder: '新しいジャンル（フォルダ名）' }),
+    genreSelect: el('select', { class: 'input fetch-genre-select', title: '保存先にあるフォルダと、これまでに使ったジャンル' }),
     author: input('fetch-author', { list: 'fetch-authors', placeholder: '任意（<genre>-<author>）' }),
     numbered: el('input', { type: 'checkbox', class: 'fetch-numbered' }),
     minSize: input('fetch-min', { type: 'number', min: '0', step: '1' }),
@@ -208,13 +255,18 @@ function build() {
   }
   for (const k of ['genre', 'author', 'minSize', 'out', 'cwd']) f[k].addEventListener('change', () => persist());
   f.numbered.addEventListener('change', () => { previewCommand(); persist(); });
+  f.genreSelect.addEventListener('change', onGenrePicked);
+  f.out.addEventListener('change', refreshGenres);
+  f.genreRow = field('', f.genre);
+  f.genreRow.classList.add('fetch-genre-new');
 
   panel.replaceChildren(
     el('div', { class: 'fetch-head' }, el('h3', {}, '画像取得（fotoget）'), close),
     el('div', { class: 'fetch-form' },
       field('URL', f.url),
       field('タイトル', f.title),
-      field('ジャンル', f.genre),
+      field('ジャンル', f.genreSelect),
+      f.genreRow,
       field('作者', f.author),
       el('label', { class: 'toggle fetch-check' }, f.numbered, '通し番号を付ける（-n）'),
       field('最小サイズ', f.minSize, el('span', { class: 'muted small' }, 'px')),
@@ -229,6 +281,8 @@ function build() {
     f.genreList, f.authorList,
   );
   previewCommand();
+  syncGenreSelect();
+  refreshGenres();
 }
 
 /** Show / hide the right sidebar (no argument: toggle). */
@@ -237,6 +291,7 @@ export function toggleFetchPanel(force) {
   const open = force === undefined ? !isFetchOpen() : !!force;
   layout.classList.toggle('fetch-open', open);
   persist();
+  if (open) refreshGenres();
   if (open) requestAnimationFrame(() => (f.url.value ? f.title : f.url).focus());
   else if (panel.contains(document.activeElement)) document.activeElement.blur();
 }

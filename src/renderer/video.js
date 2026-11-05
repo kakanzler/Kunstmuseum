@@ -102,7 +102,7 @@ export function activePlayer() {
 /** Full-window overlay player. Esc / right-click closes it. */
 export function openVideoPlayer(item) {
   if (player) player.close();
-  const video = el('video', { class: 'player-video', controls: true, autoplay: true, src: fileUrl(item) });
+  const video = el('video', { class: 'player-video', controls: true, autoplay: true, loop: true, src: fileUrl(item) });
   const name = el('div', { class: 'player-name' }, item.name || basename(item.path));
   const closeBtn = el('button', { class: 'btn player-close', title: '閉じる（Esc）' }, '✕');
   const root = el('div', { class: 'player-overlay', tabindex: '-1' }, video, name, closeBtn);

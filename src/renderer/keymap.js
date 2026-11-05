@@ -16,6 +16,7 @@ export const COMMANDS = [
   { id: 'tree.maskOn', label: 'マスク状態にする（マスクしたフォルダを隠す）', category: '表示', default: 'Ctrl+Alt+Shift+M' },
   { id: 'settings.open', label: '設定を開く', category: '全般', default: 'Ctrl+,' },
   { id: 'search.quickOpen', label: 'ファイル名で検索（全フォルダ）', category: '全般', default: 'Ctrl+F' },
+  { id: 'fav.toggle', label: 'お気に入りに追加／外す（選択中のファイル）', category: '編集', default: 'Alt+V' },
   { id: 'tags.bulkFolder', label: 'フォルダのカテゴリを一括編集', category: '編集', default: 'Alt+Shift+C' },
   { id: 'tab.close', label: 'タブを閉じる', category: 'タブ', default: 'Ctrl+W' },
   { id: 'tab.splitRight', label: '右に分割', category: 'タブ', default: 'Ctrl+\\' },

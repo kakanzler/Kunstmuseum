@@ -264,7 +264,8 @@ export function renderTree() {
   rows = [];
   rowEls = new Map();
   const frag = document.createDocumentFragment();
-  frag.append(rowEl({ type: 'special', name: '全フォルダ（タグ付き画像）', depth: 0 }));
+  frag.append(rowEl({ type: 'special', special: 'tagged', name: '全フォルダ（タグ付き画像）', depth: 0 }));
+  frag.append(rowEl({ type: 'special', special: 'favorites', name: 'お気に入り', depth: 0 }));
   frag.append(el('div', { class: 'tree-sep' }));
   if (!state.roots.length) frag.append(el('div', { class: 'tree-empty' }, 'フォルダが登録されていません。'));
   for (const r of state.roots) {
@@ -305,8 +306,11 @@ function appendFolder(frag, node, depth) {
 function rowEl(r) {
   const pad = { paddingLeft: `${6 + r.depth * 14}px` };
   if (r.type === 'special') {
-    return el('div', { class: 'tree-row special', style: pad, dataset: { type: 'special' }, title: '登録フォルダ内でタグが付いた画像をすべて表示' },
-      el('span', { class: 'tree-caret leaf' }, ''), el('span', { class: 'tree-icon' }, '◆'), el('span', { class: 'tree-label' }, r.name));
+    const fav = r.special === 'favorites';
+    return el('div', {
+      class: fav ? 'tree-row special fav' : 'tree-row special', style: pad, dataset: { type: 'special', special: r.special },
+      title: fav ? '★ を付けたファイルをすべて表示' : '登録フォルダ内でタグが付いた画像をすべて表示',
+    }, el('span', { class: 'tree-caret leaf' }, ''), el('span', { class: 'tree-icon' }, fav ? '★' : '◆'), el('span', { class: 'tree-label' }, r.name));
   }
   if (r.type === 'more') {
     const e = el('div', { class: 'tree-row more', style: pad, dataset: { type: 'more', parent: r.parent } },
@@ -349,8 +353,9 @@ function paint() {
     e.classList.toggle('current', type === 'folder' && curDirs.some((d) => samePath(d, p)));
     e.classList.toggle('focused', focusPath != null && p === focusPath);
   }
-  const special = tree.querySelector('.tree-row.special');
-  if (special) special.classList.toggle('current', !!cur && cur.kind === 'tagged');
+  for (const special of tree.querySelectorAll('.tree-row.special')) {
+    special.classList.toggle('current', !!cur && cur.kind === special.dataset.special);
+  }
 }
 
 export function paintCurrent() {
@@ -423,7 +428,11 @@ function onClick(e) {
   if (!row || renaming) return;
   tree.focus({ preventScroll: true });
   const type = row.dataset.type;
-  if (type === 'special') { ctx.openTagged(); return; }
+  if (type === 'special') {
+    if (row.dataset.special === 'favorites') ctx.openFavorites();
+    else ctx.openTagged();
+    return;
+  }
   if (type === 'more') {
     const k = normKey(row.dataset.parent);
     shown.set(k, (shown.get(k) || PAGE) + PAGE);

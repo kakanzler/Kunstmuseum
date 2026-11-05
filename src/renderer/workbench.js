@@ -512,6 +512,11 @@ class Workbench {
     return this.openSource({ kind: 'tagged' }, opts);
   }
 
+  /** ★ お気に入り. */
+  openFavorites(opts = {}) {
+    return this.openSource({ kind: 'favorites' }, opts);
+  }
+
   /** The gallery pane openSource() would reuse (active, else most recent), or null. */
   targetGallery() {
     const at = this.model.activeTab();

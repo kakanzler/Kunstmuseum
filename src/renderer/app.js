@@ -14,6 +14,7 @@ import { openBulkEditor } from './bulk.js';
 import { initFetchPanel, toggleFetchPanel } from './fetcher.js';
 import { initVideoFrames, isPlayerOpen } from './video.js';
 import { initMask, setMaskEnabled, maskEnabled, isHiddenPath } from './mask.js';
+import { toggleSelectedFavorites } from './favorites.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -131,6 +132,7 @@ function registerAllCommands() {
     'view.resetZoom': () => { if (pane()) pane().resetZoom(); },
     'search.quickOpen': () => openQuickOpen(wb),
     'tags.bulkFolder': () => openBulkForCurrentFolder(),
+    'fav.toggle': () => { toggleSelectedFavorites(); },
     'view.refresh': () => {
       const p = pane();
       if (p && p.kind === 'gallery') p.reload();

@@ -42,6 +42,36 @@ function buildArgs(opts) {
   return args;
 }
 
+/**
+ * ジャンル pulldown choices: the folders already in the save folder plus the
+ * genres used before. fotoget names a folder <genre>-<author> when an author
+ * is given, so such a folder counts as its genre when both parts are known.
+ */
+function genreOptions(dirNames, history = [], authors = []) {
+  const clean = (xs) => (Array.isArray(xs) ? xs : []).map(str).filter(Boolean);
+  const dirs = clean(dirNames);
+  const hist = clean(history);
+  const auth = clean(authors);
+  const known = new Set([...dirs, ...hist]);
+  const out = new Set(hist);
+  for (const d of dirs) {
+    const g = [...known].find((k) => k !== d && auth.some((a) => d === `${k}-${a}`));
+    out.add(g || d);
+  }
+  return [...out].sort((a, b) => a.localeCompare(b, 'ja'));
+}
+
+/** Folder names directly inside `out` (an unreadable / missing folder → []). */
+async function listGenreDirs(out) {
+  const dir = str(out) || DEFAULTS.out;
+  try {
+    const ents = await fs.promises.readdir(dir, { withFileTypes: true });
+    return ents.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
 /** Display form of a command line (for the panel; not executed). */
 function displayCommand(args) {
   return ['uv', ...args].map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ');
@@ -103,4 +133,4 @@ class FetchRunner {
   }
 }
 
-module.exports = { FetchRunner, buildArgs, displayCommand, FETCH_DEFAULTS: DEFAULTS };
+module.exports = { FetchRunner, buildArgs, displayCommand, genreOptions, listGenreDirs, FETCH_DEFAULTS: DEFAULTS };

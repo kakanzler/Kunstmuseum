@@ -110,6 +110,7 @@ class Store {
       images: {},
       views: {},   // normalized image path → saved viewer zoom {scale, cx, cy}
       videoThumbs: {}, // normalized video path → thumbnail scene (seconds)
+      favorites: {},   // normalized file path → actual path (★ お気に入り)
     };
   }
 
@@ -150,6 +151,7 @@ class Store {
       images: {},
       views: {},
       videoThumbs: {},
+      favorites: {},
     };
     if (!out.tagTypes.length) out.tagTypes = def.tagTypes;
     const typeIds = new Set(out.tagTypes.map((t) => t.id));
@@ -198,6 +200,12 @@ class Store {
       for (const [k, v] of Object.entries(d.videoThumbs)) {
         const t = cleanThumbTime(v);
         if (t) out.videoThumbs[this.norm(k)] = t;
+      }
+    }
+    if (d.favorites && typeof d.favorites === 'object') {
+      for (const [k, v] of Object.entries(d.favorites)) {
+        const real = typeof v === 'string' && v ? v : v === true ? k : null;
+        if (real && this.norm(real) === this.norm(k)) out.favorites[this.norm(k)] = path.resolve(real);
       }
     }
     return out;
@@ -647,6 +655,12 @@ class Store {
       delete this.data.videoThumbs[k];
       this.data.videoThumbs[this.norm(remap(k))] = v;
     }
+    for (const k of Object.keys(this.data.favorites)) {
+      if (!this.isInside(od, k)) continue;
+      const np = remap(this.data.favorites[k]);
+      delete this.data.favorites[k];
+      this.data.favorites[this.norm(np)] = np;
+    }
     this.data.roots = this.data.roots.map((r) => (this.isInside(od, r) ? remap(r) : r));
     const lf = this.data.settings.lastFolder;
     if (lf && this.isInside(od, lf)) this.data.settings.lastFolder = remap(lf);
@@ -675,11 +689,11 @@ class Store {
     const fk = this.norm(from);
     const tk = this.norm(to);
     let moved = false;
-    for (const map of [this.data.views, this.data.videoThumbs]) {
+    for (const map of [this.data.views, this.data.videoThumbs, this.data.favorites]) {
       const v = map[fk];
       if (v === undefined) continue;
       delete map[fk];
-      map[tk] = v;
+      map[tk] = map === this.data.favorites ? path.resolve(to) : v;
       moved = true;
     }
     return moved;
@@ -698,6 +712,29 @@ class Store {
     else if (k in this.data.videoThumbs) delete this.data.videoThumbs[k];
     else return;
     this.save();
+  }
+
+  // ---------- favorites (★) ----------
+  isFavorite(p) {
+    return this.norm(p) in this.data.favorites;
+  }
+
+  /** Star (on) or unstar the files. Returns how many entries changed. */
+  setFavorites(paths, on) {
+    let n = 0;
+    for (const p of paths) {
+      if (typeof p !== 'string' || !p) continue;
+      const k = this.norm(p);
+      if (on && !(k in this.data.favorites)) { this.data.favorites[k] = path.resolve(p); n++; }
+      else if (!on && k in this.data.favorites) { delete this.data.favorites[k]; n++; }
+    }
+    if (n) this.save();
+    return n;
+  }
+
+  /** Paths (original case) of every starred file. */
+  listFavorites() {
+    return Object.values(this.data.favorites);
   }
 
   /**
@@ -730,10 +767,12 @@ class Store {
       delete this.data.views[k];
       views++;
     }
-    for (const k of Object.keys(this.data.videoThumbs)) {
-      if (!missing(k)) continue;
-      delete this.data.videoThumbs[k];
-      views++;
+    for (const map of [this.data.videoThumbs, this.data.favorites]) {
+      for (const k of Object.keys(map)) {
+        if (!missing(k)) continue;
+        delete map[k];
+        views++;
+      }
     }
     if (removed || views) this.save();
     return removed;

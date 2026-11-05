@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   exists: call('fs:exists'),
   scan: call('fs:scan'),
   listTagged: call('fs:listTagged'),
+  listFavorites: call('fs:listFavorites'),
   stat: call('fs:stat'),
   renameFile: call('fs:renameFile'),
   renameDir: call('fs:renameDir'),
@@ -62,6 +63,8 @@ contextBridge.exposeInMainWorld('api', {
   removeImageTags: call('images:removeTags'),
   getImageView: call('images:getView'),
   setImageView: call('images:setView'),
+  getFavorites: call('images:getFavorites'),
+  toggleFavorite: call('images:toggleFavorite'),
   getVideoThumbTime: call('videos:getThumbTime'),
   setVideoThumbTime: call('videos:setThumbTime'),
   // main asks for a video frame: handler({path, time}) → Promise<ArrayBuffer>
@@ -89,6 +92,7 @@ contextBridge.exposeInMainWorld('api', {
   // 画像取得 (fotoget)
   fetchDefaults: call('fetch:defaults'),
   fetchRun: call('fetch:run'),
+  fetchGenres: call('fetch:genres'),
   fetchCancel: call('fetch:cancel'),
   fetchOpenOut: call('fetch:openOut'),
   // cb({id, stream, text}) / cb({id, code, cancelled, error})

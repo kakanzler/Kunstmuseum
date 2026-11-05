@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildArgs, displayCommand, FETCH_DEFAULTS } = require('../src/main/fetcher');
+const { buildArgs, displayCommand, genreOptions, listGenreDirs, FETCH_DEFAULTS } = require('../src/main/fetcher');
 
 const base = { url: 'https://example.com/a?b=1', genre: 'g', title: 't' };
 
@@ -38,4 +38,29 @@ test('buildArgs rejects missing or invalid input', () => {
 
 test('displayCommand quotes arguments with spaces', () => {
   assert.equal(displayCommand(['run', '--out=C:\a b']), 'uv run "--out=C:\a b"');
+});
+
+test('genreOptions: save-folder dirs + history, <genre>-<author> folded, sorted, unique', () => {
+  assert.deepEqual(genreOptions(['百合', 'JK-山田', 'NTR', '9999---others'], ['JK', '百合'], ['山田']),
+    ['9999---others', 'JK', 'NTR', '百合']);
+  // an unknown author keeps the folder as its own genre
+  assert.deepEqual(genreOptions(['JK-田中'], ['JK'], ['山田']), ['JK', 'JK-田中']);
+  assert.deepEqual(genreOptions(null, undefined, 'x'), []);
+  assert.deepEqual(genreOptions(['  ', 'a'], ['', ' a ']), ['a']);
+});
+
+test('listGenreDirs lists only folders, and [] for a missing folder', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(process.env.KM_TEST_TMP || os.tmpdir(), 'km-genres-'));
+  try {
+    fs.mkdirSync(path.join(dir, '百合'));
+    fs.mkdirSync(path.join(dir, '.hidden'));
+    fs.writeFileSync(path.join(dir, 'note.txt'), 'x');
+    assert.deepEqual(await listGenreDirs(dir), ['百合']);
+    assert.deepEqual(await listGenreDirs(path.join(dir, 'nope')), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

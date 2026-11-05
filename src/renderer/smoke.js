@@ -328,6 +328,12 @@ async function phase1({ wb, sidebar, step, report }) {
     await waitFor(() => fetchPanelState().open && document.getElementById('fetcher').offsetWidth > 200, 3000, 'Ctrl+] opens the fetch panel');
     const { form } = fetchPanelState();
     await waitFor(() => document.activeElement === form.url, 2000, 'URL field focused');
+    // ジャンル pulldown: 「新しいジャンル」 reveals the text field, a listed genre hides it
+    await waitFor(() => [...form.genreSelect.options].some((o) => o.value === '__new_genre__'), 3000, 'genre pulldown filled');
+    form.genreSelect.value = '__new_genre__';
+    form.genreSelect.dispatchEvent(new Event('change'));
+    assert(!form.genreRow.hidden && document.activeElement === form.genre, 'new genre field shown and focused');
+    form.genre.value = '';
     form.url.value = 'https://example.com/';
     form.title.value = '';
     form.run.click();
@@ -425,6 +431,7 @@ async function phase1({ wb, sidebar, step, report }) {
   // 23. wheel zoom memory, still GIFs, multi-folder gallery, Recycle Bin
   await viewerFolderTrashChecks({ wb, g, galleryTabId, sidebar, step, report });
   await folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, report });
+  await favoritesChecks({ wb, g, galleryTabId, step, report });
   // a second gallery tab on the masked folder (mask is off now): the masked relaunch must not show it
   await wb.openFolder(report.maskedFolder, { newTab: true });
   wb.activate(galleryTabId);
@@ -1051,6 +1058,7 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   assert(res.status === 206 && (await res.arrayBuffer()).byteLength === 10, `range request served (${res.status})`);
   wb.openImage(vpath, { fromPane: g });
   await waitFor(() => activePlayer() && activePlayer().video.readyState >= 1, 8000, 'player opened');
+  assert(activePlayer().video.loop, 'player loops the video');
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   await waitFor(() => !activePlayer(), 3000, 'player closed with Esc');
   const tr = await api.trash([vpath]);
@@ -1058,4 +1066,39 @@ async function folderMaskVideoChecks({ wb, g, galleryTabId, sidebar, step, repor
   await waitFor(() => !g.itemsByPath.has(vpath), 8000, 'video gone from the gallery');
   report.video = { thumbWidth: vimg.naturalWidth };
   step(`video: tile with a ${vimg.naturalWidth}px frame thumbnail, Range 206, player opens and Esc closes`);
+}
+
+/** ★ お気に入り: Alt+V on the selection, tile badge, sidebar お気に入り view, toggle off. */
+async function favoritesChecks({ wb, g, galleryTabId, step, report }) {
+  wb.activate(galleryTabId);
+  const root = state.roots[0].path;
+  if (!g.source || !samePath(g.source.path, root) || g.source.paths) await g.setSource({ kind: 'folder', path: root });
+  await waitFor(() => g.loaded && g.view.length >= 2, 5000, 'root images for favorites');
+  const picks = g.view.slice(0, 2).map((it) => it.path);
+  g.selectIndex(0);
+  g.selectIndex(1, { toggle: true });
+  await waitFor(() => picks.every((p) => state.selection.paths.includes(p)), 2000, 'two images selected');
+  g.grid.focus({ preventScroll: true });
+  key({ key: 'v', code: 'KeyV', altKey: true });
+  await waitForAsync(async () => { const f = await api.getFavorites(picks); return picks.every((p) => f[p]); }, 3000, 'Alt+V starred both');
+  await waitFor(() => picks.every((p) => g.tileByPath.get(p).classList.contains('fav')), 2000, 'star badges on the tiles');
+  const row = document.querySelector('#sidebar .tree-row.special[data-special="favorites"]') || document.querySelector('.tree-row.special[data-special="favorites"]');
+  assert(row, 'sidebar お気に入り row');
+  row.click();
+  await waitFor(() => g.source && g.source.kind === 'favorites' && g.loaded && g.items.length === 2, 5000, 'お気に入り view lists both');
+  assert(g.title() === '★ お気に入り', 'favorites title');
+  g.selectIndex(0);
+  const one = g.view[0].path;
+  g.grid.focus({ preventScroll: true });
+  key({ key: 'v', code: 'KeyV', altKey: true });
+  await waitFor(() => g.loaded && g.items.length === 1 && !g.itemsByPath.has(one), 5000, 'Alt+V again unstars and drops it from the view');
+  const rest = g.items[0].path;
+  g.selectIndex(0);
+  key({ key: 'v', code: 'KeyV', altKey: true });
+  await waitFor(() => g.loaded && g.items.length === 0, 5000, 'favorites emptied');
+  const f = await api.getFavorites(picks);
+  assert(!f[one] && !f[rest], 'nothing left starred');
+  await g.setSource({ kind: 'folder', path: root });
+  report.favorites = { starred: picks.length };
+  step('favorites: Alt+V stars the selection (badges), サイドバー「お気に入り」 lists them, Alt+V again unstars');
 }

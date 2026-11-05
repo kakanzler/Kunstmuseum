@@ -6,6 +6,8 @@ import { api, state, on, lookupItem } from './state.js';
 import { el, toast, toastError, formatBytes, formatDate, thumbUrl, fileUrl, basename, isVideo } from './ui.js';
 import { videoInfo, formatDuration } from './video.js';
 import { tagChip, createTagInput, addTagsToPaths, removeTagsFromPaths, sortedTags } from './tags.js';
+import { toggleFavorites } from './favorites.js';
+import { keyLabel } from './commands.js';
 
 const $ = (id) => document.getElementById(id);
 let panel;
@@ -30,6 +32,10 @@ export function initInspector(context) {
     if (state.selection.paths.some((p) => map && p in map)) render();
   });
   on('paths-renamed', (renames) => renames.forEach((r) => statCache.delete(r.from)));
+  on('favorites-changed', ({ on: starred, paths }) => {
+    for (const p of paths) { const st = statCache.get(p); if (st) st.fav = starred; }
+    if (single && single.path && paths.includes(single.path)) paintFav(starred);
+  });
   render();
 }
 
@@ -74,6 +80,7 @@ function buildSingle() {
   const mtime = td();
   const pathEl = td();
   const name = el('div', { class: 'insp-name' });
+  const fav = el('button', { class: 'btn small insp-fav', onclick: () => single.path && toggleFavorites([single.path]) }, '☆');
   const root = el('div', {},
     preview, name,
     el('table', { class: 'insp-table' },
@@ -82,13 +89,27 @@ function buildSingle() {
       el('tr', {}, el('th', {}, '更新日時'), mtime),
       el('tr', {}, el('th', {}, 'パス'), pathEl)),
     el('div', { class: 'insp-actions' },
+      fav,
       el('button', { class: 'btn small', onclick: () => single.path && ctx && ctx.openImage(single.path, {}) }, '表示'),
       el('button', { class: 'btn small', onclick: () => single.path && api.showItem(single.path).catch(toastError) }, 'エクスプローラーで表示'),
       el('button', {
         class: 'btn small',
         onclick: () => single.path && api.copyText(single.path).then(() => toast('パスをコピーしました。', 'success', 1800)).catch(toastError),
       }, 'パスをコピー')));
-  single = { root, img, preview, name, dims, size, mtime, pathEl, path: null, url: null, swapToken: 0 };
+  single = { root, img, preview, name, dims, size, mtime, pathEl, fav, path: null, url: null, swapToken: 0 };
+}
+
+function paintFav(starred) {
+  if (!single) return;
+  single.fav.classList.toggle('on', !!starred);
+  setText(single.fav, starred ? '★ お気に入り' : '☆ お気に入り');
+  single.fav.title = `${starred ? 'お気に入りから外す' : 'お気に入りに追加'}（${keyLabel('fav.toggle')}）`;
+}
+
+async function loadFav(p) {
+  let starred = false;
+  try { starred = !!(await api.getFavorites([p]))[p]; } catch { /* unknown → off */ }
+  if (single && single.path === p) paintFav(starred);
 }
 
 function buildMulti() {
@@ -199,6 +220,8 @@ async function render() {
     setText(single.mtime, formatDate(it.mtime));
     setText(single.pathEl, it.path);
     if (changed || single.dims.textContent === '') loadDims(it);
+    if (typeof it.fav === 'boolean') paintFav(it.fav);
+    else loadFav(it.path);
   } else {
     if (!multi) buildMulti();
     setMode('multi', multi.root);
