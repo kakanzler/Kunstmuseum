@@ -327,7 +327,7 @@ input[type="color"] { width: 32px; height: 24px; padding: 0; border: 1px solid v
 .fetch-label { color: var(--muted); font-size: 12px; }
 .fetch-field .input { width: 100%; min-width: 0; }
 .fetch-genre-select { cursor: pointer; }
-.fetch-genre-new[hidden] { display: none; }
+.fetch-genre-new[hidden], .fetch-field[hidden] { display: none; }
 .fetch-check { padding-left: 70px; }
 .fetch-more summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
 .fetch-more .fetch-field + .fetch-field { margin-top: 6px; }

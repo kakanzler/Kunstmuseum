@@ -339,6 +339,15 @@ async function phase1({ wb, sidebar, step, report }) {
     form.run.click();
     await waitFor(() => /タイトル|ジャンル/.test(document.querySelector('.fetch-status').textContent), 3000, 'validation error shown');
     assert(!fetchPanelState().running, 'invalid form did not start a job');
+    // "list" typed at the start of the URL → 一覧モード (pages field instead of title)
+    form.url.value = 'list https://example.com/cat';
+    form.url.dispatchEvent(new Event('input'));
+    assert(form.mode.value === 'list' && form.url.value === 'https://example.com/cat', 'list prefix switches mode and is removed');
+    assert(form.titleRow.offsetHeight === 0 && form.pagesRow.offsetHeight > 0, 'list mode shows pages instead of title');
+    assert(document.querySelector('.fetch-preview').textContent.startsWith('uv run fotoget-list'), 'preview uses fotoget-list');
+    form.url.value = 'page https://example.com/';
+    form.url.dispatchEvent(new Event('input'));
+    assert(form.mode.value === 'page' && form.titleRow.offsetHeight > 0, 'page prefix switches back');
     form.url.value = '';
     ctrlBracket('Backslash', form.url); // JIS layout, typed inside a text field
     await waitFor(() => !fetchPanelState().open && document.getElementById('fetcher').offsetWidth === 0, 3000, 'Ctrl+] closes it from a field');

@@ -1,6 +1,7 @@
 'use strict';
-// 画像取得 (fotoget): runs `uv run fotoget …` in the fotoget project folder and
-// streams its output to the renderer. Arguments are passed as an argv array
+// 画像取得 (fotoget): runs `uv run fotoget …` (one page) or `uv run fotoget-list …`
+// (every post of a paginated listing, mode 'list') in the fotoget project folder
+// and streams its output to the renderer. Arguments are passed as an argv array
 // (no shell), so titles / URLs can never be interpreted as shell syntax.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -14,6 +15,8 @@ const DEFAULTS = Object.freeze({
 });
 
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
+// fotoget-list --pages: "1-248", "5", "1-3,7"
+const PAGES = /^\d+(-\d+)?(,\d+(-\d+)?)*$/;
 
 /**
  * Validated argv for `uv` from the panel form. Throws a user-facing (Japanese)
@@ -31,11 +34,17 @@ function buildArgs(opts) {
   try { u = new URL(url); } catch { throw new Error('URL の形式が正しくありません。'); }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('URL は http:// か https:// で始めてください。');
   if (!genre) throw new Error('ジャンルを入力してください。');
-  if (!title) throw new Error('タイトルを入力してください。');
+  const list = o.mode === 'list';
+  const pages = str(o.pages).replace(/\s+/g, '') || '1';
+  if (list) {
+    if (!PAGES.test(pages)) throw new Error('ページは 1-248 や 1-3,7 の形式で指定してください。');
+  } else if (!title) throw new Error('タイトルを入力してください。');
   const minSize = o.minSize === undefined || o.minSize === '' ? DEFAULTS.minSize : Number(o.minSize);
   if (!Number.isInteger(minSize) || minSize < 0 || minSize > 100000) throw new Error('最小サイズは 0 以上の整数で指定してください。');
   // `--opt=value` keeps a value that starts with "-" from being read as an option
-  const args = ['run', 'fotoget', `--genre=${genre}`, `--title=${title}`];
+  const args = list
+    ? ['run', 'fotoget-list', `--pages=${pages}`, `--genre=${genre}`] // titles come from each post's h1
+    : ['run', 'fotoget', `--genre=${genre}`, `--title=${title}`];
   if (author) args.push(`--author=${author}`);
   if (o.numbered !== false) args.push('-n');
   args.push(`--out=${out}`, `--min-size=${minSize}`, '--', url);

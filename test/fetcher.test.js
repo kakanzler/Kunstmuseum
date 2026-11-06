@@ -36,6 +36,17 @@ test('buildArgs rejects missing or invalid input', () => {
   assert.throws(() => buildArgs({ ...base, minSize: '1.5' }), /最小サイズ/);
 });
 
+test('buildArgs list mode runs fotoget-list with --pages and no title', () => {
+  assert.deepEqual(buildArgs({ ...base, title: '', mode: 'list', pages: ' 1-248 ', minSize: '200', out: 'D:\o' }), [
+    'run', 'fotoget-list', '--pages=1-248', '--genre=g', '-n', '--out=D:\o', '--min-size=200', '--', 'https://example.com/a?b=1',
+  ]);
+  assert.ok(buildArgs({ ...base, mode: 'list' }).includes('--pages=1'));
+  assert.ok(buildArgs({ ...base, mode: 'list', pages: '1-3,7' }).includes('--pages=1-3,7'));
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pages: '1-' }), /ページ/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pages: '--x' }), /ページ/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', genre: '' }), /ジャンル/);
+});
+
 test('displayCommand quotes arguments with spaces', () => {
   assert.equal(displayCommand(['run', '--out=C:\a b']), 'uv run "--out=C:\a b"');
 });
