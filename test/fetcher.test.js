@@ -36,15 +36,35 @@ test('buildArgs rejects missing or invalid input', () => {
   assert.throws(() => buildArgs({ ...base, minSize: '1.5' }), /最小サイズ/);
 });
 
-test('buildArgs list mode runs fotoget-list with --pages and no title', () => {
-  assert.deepEqual(buildArgs({ ...base, title: '', mode: 'list', pages: ' 1-248 ', minSize: '200', out: 'D:\o' }), [
-    'run', 'fotoget-list', '--pages=1-248', '--genre=g', '-n', '--out=D:\o', '--min-size=200', '--', 'https://example.com/a?b=1',
+test('buildArgs list mode runs fotoget-list with from-to pages, workers and no title', () => {
+  assert.deepEqual(buildArgs({ ...base, title: '', mode: 'list', pageFrom: ' 1 ', pageTo: '248', workers: '4', minSize: '200', out: 'D:\o' }), [
+    'run', 'fotoget-list', '--pages=1-248', '--workers=4', '--genre=g', '-n', '--out=D:\o', '--min-size=200', '--', 'https://example.com/a?b=1',
   ]);
-  assert.ok(buildArgs({ ...base, mode: 'list' }).includes('--pages=1'));
-  assert.ok(buildArgs({ ...base, mode: 'list', pages: '1-3,7' }).includes('--pages=1-3,7'));
-  assert.throws(() => buildArgs({ ...base, mode: 'list', pages: '1-' }), /ページ/);
-  assert.throws(() => buildArgs({ ...base, mode: 'list', pages: '--x' }), /ページ/);
+  const a = buildArgs({ ...base, mode: 'list' }); // empty from / to / workers
+  assert.ok(a.includes('--pages=1-') && a.includes('--workers=1'), 'empty 終了 runs until the last page');
+  assert.ok(buildArgs({ ...base, mode: 'list', pageFrom: '5', pageTo: '5' }).includes('--pages=5-5'));
+  assert.ok(buildArgs({ ...base, mode: 'list', pageFrom: '7' }).includes('--pages=7-'));
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pageFrom: '0' }), /開始ページ/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pageFrom: '1.5' }), /開始ページ/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pageTo: '-3' }), /終了ページ/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', pageFrom: '10', pageTo: '3' }), /開始ページ以上/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', workers: '0' }), /並列数/);
+  assert.throws(() => buildArgs({ ...base, mode: 'list', workers: '17' }), /並列数/);
   assert.throws(() => buildArgs({ ...base, mode: 'list', genre: '' }), /ジャンル/);
+});
+
+test('buildJob 複数URL mode feeds the post list to fotoget-list via stdin', () => {
+  const { buildJob, postLines } = require('../src/main/fetcher');
+  const urls = '# memo\r\n https://x/a.html \n\nhttps://x/b.html  手動 タイトル\n';
+  const job = buildJob({ mode: 'urls', urls, genre: 'g', workers: '3', minSize: '200', out: 'D:\\o', url: 'ignored' });
+  assert.deepEqual(job.args, ['run', 'fotoget-list', '--posts-file=-', '--workers=3', '--genre=g', '-n', '--out=D:\\o', '--min-size=200']);
+  assert.equal(job.stdin, 'https://x/a.html\nhttps://x/b.html  手動 タイトル\n');
+  assert.equal(job.count, 2);
+  assert.equal(buildJob(base).stdin, null);
+  assert.throws(() => postLines('https://x/a.html\nftp://x/b'), /2 行目/);
+  assert.throws(() => postLines('\n# only a comment\n'), /1 行に 1 つ/);
+  assert.throws(() => buildJob({ mode: 'urls', urls: 'https://x/a', genre: '' }), /ジャンル/);
+  assert.throws(() => buildJob({ mode: 'urls', urls: 'https://x/a', genre: 'g', workers: '99' }), /並列数/);
 });
 
 test('displayCommand quotes arguments with spaces', () => {

@@ -11,8 +11,9 @@ const MAX_LOG_LINES = 600;
 const MAX_HISTORY = 30;
 const NEW_GENRE = '__new_genre__'; // pulldown entry that reveals the text field
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-// "list" / "page" typed at the start of the URL field switches the mode
-const MODE_PREFIX = /^\s*(list|page)(?=\s|$|https?:)\s*/i;
+// "list" / "urls" / "page" typed at the start of the URL field switches the mode
+const MODE_PREFIX = /^\s*(list|urls|page)(?=\s|$|https?:)\s*/i;
+const MODES = ['page', 'list', 'urls'];
 
 let panel = null;
 let layout = null;
@@ -42,7 +43,10 @@ function persist(extra = {}) {
       ...s,
       open: isFetchOpen(),
       mode: f.mode.value,
-      pages: f.pages.value.trim(),
+      pageFrom: f.pageFrom.value.trim(),
+      pageTo: f.pageTo.value.trim(),
+      workers: f.workers.value.trim(),
+      urls: f.urls.value,
       genre: f.genre.value.trim(),
       author: f.author.value.trim(),
       numbered: f.numbered.checked,
@@ -137,14 +141,40 @@ function setRunning(running) {
 
 // ---------- mode ----------
 const isList = () => f.mode.value === 'list';
+const isUrls = () => f.mode.value === 'urls';
+const MODE_HINT = {
+  page: '1ページモード',
+  list: '一覧モード: 一覧ページのURLとページ範囲を入れてください。',
+  urls: '複数URLモード: 記事のURLを 1 行に 1 つずつ入れてください（「URL タイトル」でタイトル指定）。',
+};
+const RUN_LABEL = { page: '実行', list: '一覧を実行', urls: 'まとめて実行' };
 
 function setMode(mode) {
-  f.mode.value = mode === 'list' ? 'list' : 'page';
-  f.titleRow.hidden = isList();
-  f.pagesRow.hidden = !isList();
-  f.run.textContent = isList() ? '一覧を実行' : '実行';
-  panel.classList.toggle('list-mode', isList());
+  f.mode.value = MODES.includes(mode) ? mode : 'page';
+  const m = f.mode.value;
+  f.urlRow.hidden = m === 'urls';
+  f.urlsRow.hidden = m !== 'urls';
+  f.titleRow.hidden = m !== 'page';
+  f.pagesRow.hidden = m !== 'list';
+  f.workersRow.hidden = m === 'page';
+  f.run.textContent = RUN_LABEL[m];
+  panel.classList.toggle('list-mode', m === 'list');
+  panel.classList.toggle('urls-mode', m === 'urls');
   previewCommand();
+  updateUrlCount();
+}
+
+/** Non-empty, non-comment lines of the 複数URL box. */
+const urlLines = () => f.urls.value.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+
+function updateUrlCount() {
+  f.urlsCount.textContent = `${urlLines().length} 件`;
+}
+
+function switchMode(mode) {
+  setMode(mode);
+  persist();
+  setStatus(MODE_HINT[f.mode.value]);
 }
 
 /** "list https://…" in the URL field → 一覧モード, the prefix itself is removed. */
@@ -152,18 +182,37 @@ function onUrlInput() {
   const m = f.url.value.match(MODE_PREFIX);
   if (m) {
     f.url.value = f.url.value.slice(m[0].length);
-    setMode(m[1].toLowerCase());
-    persist();
-    setStatus(isList() ? '一覧モード: 一覧ページのURLとページ範囲を入れてください。' : '1ページモード');
+    switchMode(m[1].toLowerCase());
+    if (isUrls()) {
+      if (f.url.value) f.urls.value = [f.urls.value.trimEnd(), f.url.value].filter(Boolean).join('\n') + '\n';
+      f.url.value = '';
+      updateUrlCount();
+      f.urls.focus();
+    }
   }
   previewCommand();
+}
+
+/** Pasting several URLs into the URL field switches to 複数URLモード with all of them. */
+function onUrlPaste(e) {
+  const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  const urls = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^https?:\/\//i.test(l));
+  if (urls.length < 2) return;
+  e.preventDefault();
+  f.urls.value = [f.urls.value.trimEnd(), ...urls].filter(Boolean).join('\n') + '\n';
+  f.url.value = '';
+  switchMode('urls');
+  f.urls.focus();
 }
 
 // ---------- form ----------
 function formValues() {
   return {
     mode: f.mode.value,
-    pages: f.pages.value.trim(),
+    pageFrom: f.pageFrom.value.trim(),
+    pageTo: f.pageTo.value.trim(),
+    workers: f.workers.value.trim(),
+    urls: f.urls.value,
     url: f.url.value.trim(),
     genre: f.genre.value.trim(),
     title: f.title.value.trim(),
@@ -175,13 +224,18 @@ function formValues() {
   };
 }
 
+/** fotoget-list --pages from 開始 / 終了 (empty 終了 = until the last page). */
+const pagesSpec = (v) => `${v.pageFrom || '1'}-${v.pageTo}`;
+const pagesLabel = (v) => `${v.pageFrom || '1'}〜${v.pageTo || '最後'}`;
+
 /** Command preview, mirroring main/fetcher.js buildArgs (display only). */
 function previewCommand() {
   const v = formValues();
   const q = (s) => (/[\s"]/.test(s) || !s ? `"${s}"` : s);
-  const parts = v.mode === 'list'
-    ? ['uv run fotoget-list', q(v.url || '{url}'), '--pages', q(v.pages || '1'), '--genre', q(v.genre || '{genre}')]
-    : ['uv run fotoget', q(v.url || '{url}'), '--genre', q(v.genre || '{genre}'), '--title', q(v.title || '{title}')];
+  let parts;
+  if (v.mode === 'urls') parts = ['uv run fotoget-list', '--posts-file -', '--workers', v.workers || '1', '--genre', q(v.genre || '{genre}')];
+  else if (v.mode === 'list') parts = ['uv run fotoget-list', q(v.url || '{url}'), '--pages', pagesSpec(v), '--workers', v.workers || '1', '--genre', q(v.genre || '{genre}')];
+  else parts = ['uv run fotoget', q(v.url || '{url}'), '--genre', q(v.genre || '{genre}'), '--title', q(v.title || '{title}')];
   if (v.author) parts.push('--author', q(v.author));
   if (v.numbered) parts.push('-n');
   parts.push('--out', q(v.out || defaults.out), '--min-size', v.minSize || String(defaults.minSize));
@@ -199,7 +253,9 @@ async function run() {
     setStatus(e.message, 'error');
     return;
   }
-  job = { id: res.id, title: v.mode === 'list' ? `一覧 ${v.pages || '1'} ページ` : v.title };
+  const par = `（並列 ${v.workers || '1'}）`;
+  const jobTitle = { list: `一覧 ${pagesLabel(v)} ページ${par}`, urls: `記事 ${res.count} 件${par}` }[v.mode] || v.title;
+  job = { id: res.id, title: jobTitle, mode: v.mode };
   logLines = [];
   partial = '';
   appendLog(`> ${res.command}\n  (${res.cwd})\n`);
@@ -214,7 +270,7 @@ async function run() {
 
 function onDone(m) {
   if (!job || m.id !== job.id) return;
-  const title = job.title;
+  const { title, mode } = job;
   job = null;
   setRunning(false);
   if (partial) { logLines.push(partial); partial = ''; }
@@ -233,9 +289,10 @@ function onDone(m) {
     // ready for the next page: keep genre / author, clear the per-page fields
     f.url.value = '';
     f.title.value = '';
+    if (mode === 'urls') { f.urls.value = ''; updateUrlCount(); persist(); }
     previewCommand(); // mode and page range stay for the next listing
     refreshGenres(); // a new genre folder may have been created
-    if (isFetchOpen()) f.url.focus();
+    if (isFetchOpen()) (isUrls() ? f.urls : f.url).focus();
   }
 }
 
@@ -251,8 +308,16 @@ function build() {
     url: input('fetch-url', { placeholder: 'https://…（先頭に list で一覧モード）', type: 'url' }),
     mode: el('select', { class: 'input fetch-mode', title: '1ページ: そのページの画像 / 一覧: 一覧ページの各記事（URL 欄に list と入れても切替）' },
       el('option', { value: 'page' }, '1ページ（fotoget）'),
-      el('option', { value: 'list' }, '一覧の各記事（fotoget-list）')),
-    pages: input('fetch-pages', { placeholder: '1-248 / 1-3,7' }),
+      el('option', { value: 'list' }, '一覧の各記事（fotoget-list）'),
+      el('option', { value: 'urls' }, '複数の記事URL（fotoget-list）')),
+    urls: el('textarea', {
+      class: 'input fetch-urls', rows: '6', spellcheck: 'false', wrap: 'off',
+      placeholder: 'https://…/1.html\nhttps://…/2.html  タイトル（任意）\n# で始まる行は無視',
+    }),
+    urlsCount: el('span', { class: 'muted small fetch-urls-count' }, '0 件'),
+    pageFrom: input('fetch-page-from', { type: 'number', min: '1', step: '1', placeholder: '1', title: '開始ページ' }),
+    pageTo: input('fetch-page-to', { type: 'number', min: '1', step: '1', placeholder: '最後', title: '終了ページ（空欄なら記事がなくなるまで）' }),
+    workers: input('fetch-workers', { type: 'number', min: '1', max: '16', step: '1', title: '同時に動かすブラウザ数（一覧ページ単位で分担）' }),
     title: input('fetch-title', { placeholder: '保存フォルダ名' }),
     genre: input('fetch-genre', { list: 'fetch-genres', placeholder: '新しいジャンル（フォルダ名）' }),
     genreSelect: el('select', { class: 'input fetch-genre-select', title: '保存先にあるフォルダと、これまでに使ったジャンル' }),
@@ -270,7 +335,12 @@ function build() {
     status: el('div', { class: 'fetch-status' }),
     log: el('pre', { class: 'fetch-log' }),
   };
-  f.pages.value = s.pages || '1';
+  // older settings kept one "a-b" pages string
+  const [oldFrom, oldTo] = (s.pages || '').split('-');
+  f.pageFrom.value = s.pageFrom ?? (oldFrom || '1');
+  f.pageTo.value = s.pageTo ?? (oldTo || '');
+  f.workers.value = s.workers || '1';
+  f.urls.value = s.urls || '';
   f.genre.value = s.genre || '';
   f.author.value = s.author || '';
   f.numbered.checked = s.numbered !== undefined ? s.numbered !== false : defaults.numbered;
@@ -286,14 +356,20 @@ function build() {
   f.cancel.addEventListener('click', () => api.fetchCancel().catch((e) => toastError(e)));
   f.openOut.addEventListener('click', () => api.fetchOpenOut(f.out.value.trim()).catch((e) => toastError(e)));
 
-  for (const k of ['url', 'title', 'pages', 'genre', 'author', 'minSize', 'out', 'cwd']) {
+  for (const k of ['url', 'title', 'pageFrom', 'pageTo', 'workers', 'genre', 'author', 'minSize', 'out', 'cwd']) {
     f[k].addEventListener('input', k === 'url' ? onUrlInput : previewCommand);
     f[k].addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); run(); }
     });
   }
-  for (const k of ['pages', 'genre', 'author', 'minSize', 'out', 'cwd']) f[k].addEventListener('change', () => persist());
-  f.mode.addEventListener('change', () => { setMode(f.mode.value); persist(); });
+  for (const k of ['pageFrom', 'pageTo', 'workers', 'genre', 'author', 'minSize', 'out', 'cwd']) f[k].addEventListener('change', () => persist());
+  f.mode.addEventListener('change', () => switchMode(f.mode.value));
+  f.url.addEventListener('paste', onUrlPaste);
+  f.urls.addEventListener('input', updateUrlCount);
+  f.urls.addEventListener('change', () => persist());
+  f.urls.addEventListener('keydown', (e) => { // Enter adds a line; Ctrl+Enter runs
+    if (e.key === 'Enter' && e.ctrlKey && !e.isComposing) { e.preventDefault(); run(); }
+  });
   f.numbered.addEventListener('change', () => { previewCommand(); persist(); });
   f.genreSelect.addEventListener('change', onGenrePicked);
   f.out.addEventListener('change', refreshGenres);
@@ -304,9 +380,12 @@ function build() {
     el('div', { class: 'fetch-head' }, el('h3', {}, '画像取得（fotoget）'), close),
     el('div', { class: 'fetch-form' },
       field('モード', f.mode),
-      field('URL', f.url),
+      f.urlRow = field('URL', f.url),
+      f.urlsRow = el('label', { class: 'fetch-field fetch-urls-field' },
+        el('span', { class: 'fetch-label' }, '記事URL', el('br'), f.urlsCount), f.urls),
       f.titleRow = field('タイトル', f.title),
-      f.pagesRow = field('ページ', f.pages, el('span', { class: 'muted small' }, '一覧')),
+      f.pagesRow = field('ページ', el('span', { class: 'fetch-range' }, f.pageFrom, el('span', { class: 'muted' }, '〜'), f.pageTo)),
+      f.workersRow = field('並列数', f.workers, el('span', { class: 'muted small' }, '1〜16')),
       field('ジャンル', f.genreSelect),
       f.genreRow,
       field('作者', f.author),
@@ -334,7 +413,7 @@ export function toggleFetchPanel(force) {
   layout.classList.toggle('fetch-open', open);
   persist();
   if (open) refreshGenres();
-  if (open) requestAnimationFrame(() => (f.url.value && !isList() ? f.title : f.url).focus());
+  if (open) requestAnimationFrame(() => (isUrls() ? f.urls : f.url.value && !isList() ? f.title : f.url).focus());
   else if (panel.contains(document.activeElement)) document.activeElement.blur();
 }
 

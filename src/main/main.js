@@ -33,6 +33,12 @@ if (SMOKE) {
   }
   fs.mkdirSync(ud, { recursive: true });
   app.setPath('userData', ud);
+  // The smoke window is often behind other windows (the user keeps working).
+  // Windows occlusion tracking would then pause rendering and requestAnimationFrame,
+  // hanging rAF-based checks until the 60 s timeout. Keep it rendering.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+  app.commandLine.appendSwitch('disable-renderer-backgrounding');
+  app.commandLine.appendSwitch('disable-background-timer-throttling');
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -739,6 +745,8 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      // smoke: keep rendering while another window covers this one (see the switches above)
+      ...(SMOKE ? { backgroundThrottling: false } : {}),
     },
   });
   if (maximized) mainWindow.maximize();

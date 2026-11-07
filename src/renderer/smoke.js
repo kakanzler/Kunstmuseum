@@ -327,7 +327,10 @@ async function phase1({ wb, sidebar, step, report }) {
     ctrlBracket();
     await waitFor(() => fetchPanelState().open && document.getElementById('fetcher').offsetWidth > 200, 3000, 'Ctrl+] opens the fetch panel');
     const { form } = fetchPanelState();
-    await waitFor(() => document.activeElement === form.url, 2000, 'URL field focused');
+    // Chromium ignores focus() while the window is not the OS foreground window
+    // (another app in front during the run), so only check it when we have focus.
+    if (document.hasFocus()) await waitFor(() => document.activeElement === form.url, 2000, 'URL field focused');
+    else console.info('[smoke] fetch panel: window not in the foreground, URL focus check skipped');
     // ジャンル pulldown: 「新しいジャンル」 reveals the text field, a listed genre hides it
     await waitFor(() => [...form.genreSelect.options].some((o) => o.value === '__new_genre__'), 3000, 'genre pulldown filled');
     form.genreSelect.value = '__new_genre__';
@@ -345,6 +348,31 @@ async function phase1({ wb, sidebar, step, report }) {
     assert(form.mode.value === 'list' && form.url.value === 'https://example.com/cat', 'list prefix switches mode and is removed');
     assert(form.titleRow.offsetHeight === 0 && form.pagesRow.offsetHeight > 0, 'list mode shows pages instead of title');
     assert(document.querySelector('.fetch-preview').textContent.startsWith('uv run fotoget-list'), 'preview uses fotoget-list');
+    assert(form.workersRow.offsetHeight > 0 && form.pageTo.offsetWidth > 20, 'list mode shows 開始〜終了 and 並列数');
+    const [from0, to0, w0] = [form.pageFrom.value, form.pageTo.value, form.workers.value];
+    form.pageFrom.value = '2'; form.pageTo.value = '5'; form.workers.value = '3';
+    form.workers.dispatchEvent(new Event('input'));
+    assert(document.querySelector('.fetch-preview').textContent.includes('--pages 2-5 --workers 3'), 'preview has from-to and workers');
+    form.pageTo.value = '';
+    form.pageTo.dispatchEvent(new Event('input'));
+    assert(document.querySelector('.fetch-preview').textContent.includes('--pages 2- '), 'empty 終了 = until the last page');
+    [form.pageFrom.value, form.pageTo.value, form.workers.value] = [from0, to0, w0];
+    // 複数URL: "urls <url>" moves the URL into the box; pasting several URLs appends them all
+    form.url.value = 'urls https://example.com/1.html';
+    form.url.dispatchEvent(new Event('input'));
+    assert(form.mode.value === 'urls' && form.urlRow.offsetHeight === 0 && form.urlsRow.offsetHeight > 60, 'urls prefix shows the URL box');
+    assert(form.workersRow.offsetHeight > 0 && form.titleRow.offsetHeight === 0, 'urls mode: 並列数 shown, no title');
+    form.mode.value = 'page';
+    form.mode.dispatchEvent(new Event('change'));
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'https://example.com/2.html\nhttps://example.com/3.html タイトル\n');
+    form.url.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    assert(form.mode.value === 'urls' && form.urlsCount.textContent === '3 件', `pasting 2 URLs appended them (${form.urlsCount.textContent})`);
+    assert(document.querySelector('.fetch-preview').textContent.includes('--posts-file -'), 'preview uses --posts-file -');
+    form.run.click();
+    await waitFor(() => /ジャンル/.test(document.querySelector('.fetch-status').textContent), 3000, 'urls mode validation error');
+    assert(!fetchPanelState().running, 'invalid urls form did not start a job');
+    form.urls.value = '';
     form.url.value = 'page https://example.com/';
     form.url.dispatchEvent(new Event('input'));
     assert(form.mode.value === 'page' && form.titleRow.offsetHeight > 0, 'page prefix switches back');
